@@ -34,6 +34,7 @@ config/settings
 config/secrets
 templates/maintenance_on.html
 vendor/mms-agent/settings.py
+apps/social/spam.py
 
 # ----------------------
 # Android
@@ -62,3 +63,4 @@ media/safari/NewsBlur.safariextz
 
 # IDE files
 clients/android/NewsBlur/.idea
+.tm_properties

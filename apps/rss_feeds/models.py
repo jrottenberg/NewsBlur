@@ -116,7 +116,7 @@ class Feed(models.Model):
     @property
     def favicon_url(self):
         if settings.BACKED_BY_AWS['icons_on_s3'] and self.s3_icon:
-            return "http://%s/%s.png" % (settings.S3_ICONS_BUCKET_NAME, self.pk)
+            return "https://s3.amazonaws.com/%s/%s.png" % (settings.S3_ICONS_BUCKET_NAME, self.pk)
         return reverse('feed-favicon', kwargs={'feed_id': self.pk})
     
     @property
@@ -233,7 +233,7 @@ class Feed(models.Model):
                 return
 
             if self.pk != duplicate_feeds[0].pk:
-                logging.debug(" ---> ~FRFound different feed (%s), merging..." % duplicate_feeds[0])
+                logging.debug(" ---> ~FRFound different feed (%s), merging %s in..." % (duplicate_feeds[0], self.pk))
                 feed = Feed.get_by_id(merge_feeds(duplicate_feeds[0].pk, self.pk))
                 return feed
         
@@ -956,6 +956,11 @@ class Feed(models.Model):
             return existing_story, story_has_changed
         
         for story in stories:
+            if verbose:
+                logging.debug("   ---> [%-30s] ~FBChecking ~SB%s~SN / ~SB%s" % (
+                              self.title[:30],
+                              story.get('title'),
+                              story.get('guid')))
             if not story.get('title'):
                 continue
                 
@@ -1027,7 +1032,11 @@ class Feed(models.Model):
                     original_content = zlib.decompress(existing_story.story_content_z)
                 # print 'Type: %s %s' % (type(original_content), type(story_content))
                 if story_content and len(story_content) > 10:
-                    story_content_diff = htmldiff(unicode(original_content), unicode(story_content))
+                    if "<code" in story_content:
+                        # Don't mangle stories with code, just use new
+                        story_content_diff = story_content
+                    else:
+                        story_content_diff = htmldiff(unicode(original_content), unicode(story_content))
                 else:
                     story_content_diff = original_content
                 # logging.debug("\t\tDiff: %s %s %s" % diff.getStats())
@@ -1037,7 +1046,7 @@ class Feed(models.Model):
                 if existing_story.story_hash != story.get('story_hash'):
                     self.update_story_with_new_guid(existing_story, story.get('guid'))
 
-                if settings.DEBUG and False:
+                if verbose:
                     logging.debug('- Updated story in feed (%s - %s): %s / %s' % (self.feed_title, story.get('title'), len(story_content_diff), len(story_content)))
                 
                 existing_story.story_feed = self.pk
@@ -1069,7 +1078,8 @@ class Feed(models.Model):
                     existing_story.index_story_for_search()
             else:
                 ret_values['same'] += 1
-                # logging.debug("Unchanged story: %s " % story.get('title'))
+                if verbose:
+                    logging.debug("Unchanged story (%s): %s / %s " % (story.get('story_hash'), story.get('guid'), story.get('title')))
         
         return ret_values
     
@@ -1340,7 +1350,7 @@ class Feed(models.Model):
         # story_published_now = story.get('published_now', False)
         # start_date = story_pub_date - datetime.timedelta(hours=8)
         # end_date = story_pub_date + datetime.timedelta(hours=8)
-        
+
         for existing_story in existing_stories.values():
             content_ratio = 0
             # existing_story_pub_date = existing_story.story_date
@@ -1386,9 +1396,14 @@ class Feed(models.Model):
             
             seq = difflib.SequenceMatcher(None, story_content, existing_story_content)
             
+            similiar_length_min = 1000
+            if (existing_story.story_permalink == story_link and 
+                existing_story.story_title == story.get('title')):
+                similiar_length_min = 20
+            
             if (seq
                 and story_content
-                and len(story_content) > 1000
+                and len(story_content) > similiar_length_min
                 and existing_story_content
                 and seq.real_quick_ratio() > .9 
                 and seq.quick_ratio() > .95):
@@ -1701,6 +1716,7 @@ class MStory(mongo.Document):
     story_latest_content     = mongo.StringField()
     story_latest_content_z   = mongo.BinaryField()
     original_text_z          = mongo.BinaryField()
+    original_page_z          = mongo.BinaryField()
     story_content_type       = mongo.StringField(max_length=255)
     story_author_name        = mongo.StringField()
     story_permalink          = mongo.StringField()
@@ -2049,18 +2065,30 @@ class MStory(mongo.Document):
         self.image_urls = image_urls
         return self.image_urls
 
-    def fetch_original_text(self, force=False, request=None):
+    def fetch_original_text(self, force=False, request=None, debug=False):
         original_text_z = self.original_text_z
-        feed = Feed.get_by_id(self.story_feed_id)
         
         if not original_text_z or force:
-            ti = TextImporter(self, feed=feed, request=request)
+            feed = Feed.get_by_id(self.story_feed_id)
+            ti = TextImporter(self, feed=feed, request=request, debug=debug)
             original_text = ti.fetch()
         else:
             logging.user(request, "~FYFetching ~FGoriginal~FY story text, ~SBfound.")
             original_text = zlib.decompress(original_text_z)
         
         return original_text
+
+    def fetch_original_page(self, force=False, request=None, debug=False):
+        from apps.rss_feeds.page_importer import PageImporter
+        if not self.original_page_z or force:
+            feed = Feed.get_by_id(self.story_feed_id)
+            importer = PageImporter(request=request, feed=feed, story=self)
+            original_page = importer.fetch_story()
+        else:
+            logging.user(request, "~FYFetching ~FGoriginal~FY story page, ~SBfound.")
+            original_page = zlib.decompress(self.original_page_z)
+        
+        return original_page
 
 
 class MStarredStory(mongo.Document):
@@ -2177,12 +2205,12 @@ class MStarredStory(mongo.Document):
     def feed_guid_hash(self):
         return "%s:%s" % (self.story_feed_id or "0", self.guid_hash)
     
-    def fetch_original_text(self, force=False, request=None):
+    def fetch_original_text(self, force=False, request=None, debug=False):
         original_text_z = self.original_text_z
         feed = Feed.get_by_id(self.story_feed_id)
         
         if not original_text_z or force:
-            ti = TextImporter(self, feed, request=request)
+            ti = TextImporter(self, feed=feed, request=request, debug=debug)
             original_text = ti.fetch()
         else:
             logging.user(request, "~FYFetching ~FGoriginal~FY story text, ~SBfound.")
@@ -2312,8 +2340,11 @@ class MStarredStoryCounts(mongo.Document):
             params['tag'] = tag
 
         cls.objects(**params).update_one(inc__count=amount, upsert=True)
-        story_count = cls.objects.get(**params)
-        if story_count.count <= 0:
+        try:
+            story_count = cls.objects.get(**params)
+        except cls.MultipleObjectsReturned:
+            story_count = cls.objects(**params).first()
+        if story_count and story_count.count <= 0:
             story_count.delete()
 
 

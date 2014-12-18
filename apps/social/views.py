@@ -31,6 +31,7 @@ from utils.view_functions import required_params
 from utils.story_functions import format_story_link_date__short
 from utils.story_functions import format_story_link_date__long
 from utils.story_functions import strip_tags
+from utils.ratelimit import ratelimit
 from utils import jennyholzer
 from vendor.timezones.utilities import localtime_for_timezone
 
@@ -565,7 +566,16 @@ def mark_story_as_shared(request):
             "comments": comments,
             "has_comments": bool(comments),
         }
-        shared_story = MSharedStory.objects.create(**story_db)
+        try:
+            shared_story = MSharedStory.objects.create(**story_db)
+        except MSharedStory.NotUniqueError:
+            shared_story = MSharedStory.objects.get(story_guid=story_db['story_guid'],
+                                                    user_id=story_db['user_id'])
+        except MSharedStory.DoesNotExist:
+            return json.json_response(request, {
+                'code': -1, 
+                'message': 'Story already shared but then not shared. I don\'t really know. Did you submit this twice very quickly?'
+            })
         if source_user_id:
             shared_story.set_source_user_id(int(source_user_id))
         UpdateRecalcForSubscription.delay(subscription_user_id=request.user.pk,
@@ -986,6 +996,7 @@ def load_follow_requests(request):
         'request_profiles': request_profiles,
     }
 
+@ratelimit(minutes=1, requests=10)
 @json.json_view
 def load_user_friends(request):
     user = get_user(request.user)
@@ -1127,6 +1138,8 @@ def find_friends(request):
         if results:
             email = results.group(0)
             profiles = MSocialProfile.objects.filter(email__iexact=email)[:limit]
+    if query.isdigit() and request.user.is_staff:
+        profiles = MSocialProfile.objects.filter(user_id=int(query))[:limit]
     if not profiles:
         profiles = MSocialProfile.objects.filter(username__iexact=query)[:limit]
     if not profiles:

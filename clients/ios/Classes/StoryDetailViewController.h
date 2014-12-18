@@ -14,7 +14,8 @@
 @class ASIHTTPRequest;
 
 @interface StoryDetailViewController : BaseViewController
-<UIScrollViewDelegate, UIGestureRecognizerDelegate> {
+<UIScrollViewDelegate, UIGestureRecognizerDelegate,
+UIActionSheetDelegate> {
     NewsBlurAppDelegate *appDelegate;
     
     NSString *activeStoryId;
@@ -25,6 +26,11 @@
     BOOL pullingScrollview;
     BOOL inTextView;
     BOOL inDoubleTap;
+    NSURL *activeLongPressUrl;
+    NSInteger actionSheetViewImageIndex;
+    NSInteger actionSheetCopyImageIndex;
+    NSInteger actionSheetSaveImageIndex;
+    CGSize preRotateSize;
 }
 
 @property (nonatomic) IBOutlet NewsBlurAppDelegate *appDelegate;
@@ -62,6 +68,7 @@
 
 - (void)openShareDialog;
 - (void)openTrainingDialog:(int)x yCoordinate:(int)y width:(int)width height:(int)height;
+- (void)openUserTagsDialog:(int)x yCoordinate:(int)y width:(int)width height:(int)height;
 - (void)finishLikeComment:(ASIHTTPRequest *)request;
 - (void)subscribeToBlurblog;
 - (void)finishSubscribeToBlurblog:(ASIHTTPRequest *)request;
@@ -75,6 +82,8 @@
 - (NSString *)getAvatars:(NSString *)key;
 - (void)refreshHeader;
 - (void)refreshSideoptions;
+
+- (CGPoint)pointForGesture:(UIGestureRecognizer *)gestureRecognizer;
 
 - (void)fetchTextView;
 - (void)finishFetchTextView:(ASIHTTPRequest *)request;

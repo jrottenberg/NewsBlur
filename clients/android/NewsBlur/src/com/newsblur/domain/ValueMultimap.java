@@ -13,11 +13,10 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 
 /**
- * This utility class is simply a Map<String,String> that serializes to JSON.
+ * A String-to-String multimap that serializes to JSON or HTTP request params.
  */
+@SuppressWarnings("serial")
 public class ValueMultimap implements Serializable {
-	
-	private static final long serialVersionUID = 3102965432185825759L;
 	
 	private Map<String, List<String>> multimap;
 	private String TAG = "ValueMultimap";
@@ -35,18 +34,8 @@ public class ValueMultimap implements Serializable {
 		multimap.put(key, mappedValues);
 	}
 	
-	public List<String> getValues(String key) {
-		return multimap.get(key);
-	}
-	
-	public Set<String> getKeys() {
-		return multimap.keySet();
-	}
-	
 	public String getParameterString() {
-		
-		final List<String> parameters = new ArrayList<String>();
-		
+		List<String> parameters = new ArrayList<String>();
 		for (String key : multimap.keySet()) {
 			for (String value : multimap.get(key)) {
 				final StringBuilder builder = new StringBuilder();
@@ -56,7 +45,6 @@ public class ValueMultimap implements Serializable {
 				parameters.add(builder.toString());
 			}
 		}
-		
 		return TextUtils.join("&", parameters);
 	}
 	
@@ -77,7 +65,4 @@ public class ValueMultimap implements Serializable {
 		return builder.toString();
 	}
 
-	public int size() {
-		return multimap.size();
-	}
 }

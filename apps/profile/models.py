@@ -1,5 +1,6 @@
 import time
 import datetime
+import dateutil
 import stripe
 import hashlib
 import redis
@@ -25,7 +26,8 @@ from utils import log as logging
 from utils import json_functions as json
 from utils.user_functions import generate_secret_token
 from vendor.timezones.fields import TimeZoneField
-from vendor.paypal.standard.ipn.signals import subscription_signup, payment_was_successful
+from vendor.paypal.standard.ipn.signals import subscription_signup, payment_was_successful, recurring_payment
+from vendor.paypal.standard.ipn.signals import payment_was_flagged
 from vendor.paypal.standard.ipn.models import PayPalIPN
 from vendor.paypalapi.interface import PayPalInterface
 from vendor.paypalapi.exceptions import PayPalAPIResponseError
@@ -218,19 +220,25 @@ class Profile(models.Model):
         self.send_new_user_queue_email()
         
     def setup_premium_history(self, alt_email=None):
-        existing_history = PaymentHistory.objects.filter(user=self.user)
+        paypal_payments = []
+        stripe_payments = []
+        existing_history = PaymentHistory.objects.filter(user=self.user, 
+                                                         payment_provider__in=['paypal', 'stripe'])
         if existing_history.count():
-            print " ---> Deleting existing history: %s payments" % existing_history.count()
+            logging.user(self.user, "~BY~SN~FRDeleting~FW existing history: ~SB%s payments" % existing_history.count())
             existing_history.delete()
         
         # Record Paypal payments
         paypal_payments = PayPalIPN.objects.filter(custom=self.user.username,
+                                                   payment_status='Completed',
                                                    txn_type='subscr_payment')
         if not paypal_payments.count():
             paypal_payments = PayPalIPN.objects.filter(payer_email=self.user.email,
+                                                       payment_status='Completed',
                                                        txn_type='subscr_payment')
         if alt_email and not paypal_payments.count():
             paypal_payments = PayPalIPN.objects.filter(payer_email=alt_email,
+                                                       payment_status='Completed',
                                                        txn_type='subscr_payment')
             if paypal_payments.count():
                 # Make sure this doesn't happen again, so let's use Paypal's email.
@@ -241,28 +249,19 @@ class Profile(models.Model):
                                           payment_date=payment.payment_date,
                                           payment_amount=payment.payment_gross,
                                           payment_provider='paypal')
-        
-        print " ---> Found %s paypal_payments" % len(paypal_payments)
-        
+                
         # Record Stripe payments
         if self.stripe_id:
             stripe.api_key = settings.STRIPE_SECRET
             stripe_customer = stripe.Customer.retrieve(self.stripe_id)
             stripe_payments = stripe.Charge.all(customer=stripe_customer.id).data
             
-            existing_history = PaymentHistory.objects.filter(user=self.user,
-                                                             payment_provider='stripe')
-            if existing_history.count():
-                print " ---> Deleting existing history: %s stripe payments" % existing_history.count()
-                existing_history.delete()
-        
             for payment in stripe_payments:
                 created = datetime.datetime.fromtimestamp(payment.created)
                 PaymentHistory.objects.create(user=self.user,
                                               payment_date=created,
                                               payment_amount=payment.amount / 100.0,
                                               payment_provider='stripe')
-            print " ---> Found %s stripe_payments" % len(stripe_payments)
         
         # Calculate payments in last year, then add together
         payment_history = PaymentHistory.objects.filter(user=self.user)
@@ -274,12 +273,14 @@ class Profile(models.Model):
                 recent_payments_count += 1
                 if not oldest_recent_payment_date or payment.payment_date < oldest_recent_payment_date:
                     oldest_recent_payment_date = payment.payment_date
-        print " ---> %s payments" % len(payment_history)
         
         if oldest_recent_payment_date:
             self.premium_expire = (oldest_recent_payment_date +
                                    datetime.timedelta(days=365*recent_payments_count))
             self.save()
+
+        logging.user(self.user, "~BY~SN~FWFound ~SB%s paypal~SN and ~SB%s stripe~SN payments (~SB%s payments expire: ~SN~FB%s~FW)" % (
+                     len(paypal_payments), len(stripe_payments), len(payment_history), self.premium_expire))
 
     def refund_premium(self, partial=False):
         refunded = False
@@ -297,6 +298,8 @@ class Profile(models.Model):
                 refunded = stripe_payments[0].amount/100
             logging.user(self.user, "~FRRefunding stripe payment: $%s" % refunded)
         else:
+            self.cancel_premium()
+
             paypal_opts = {
                 'API_ENVIRONMENT': 'PRODUCTION',
                 'API_USERNAME': settings.PAYPAL_API_USERNAME,
@@ -313,7 +316,6 @@ class Profile(models.Model):
             except KeyError:
                 refunded = int(transaction.payment_gross)
             logging.user(self.user, "~FRRefunding paypal payment: $%s" % refunded)
-            self.cancel_premium()
         
         return refunded
             
@@ -703,6 +705,7 @@ def paypal_signup(sender, **kwargs):
         user = User.objects.get(username__iexact=ipn_obj.custom)
     except User.DoesNotExist:
         user = User.objects.get(email__iexact=ipn_obj.payer_email)
+    logging.user(user, "~BC~SB~FBPaypal subscription signup")
     try:
         if not user.email:
             user.email = ipn_obj.payer_email
@@ -718,16 +721,45 @@ def paypal_payment_history_sync(sender, **kwargs):
         user = User.objects.get(username__iexact=ipn_obj.custom)
     except User.DoesNotExist:
         user = User.objects.get(email__iexact=ipn_obj.payer_email)
+    logging.user(user, "~BC~SB~FBPaypal subscription payment")
     try:
         user.profile.setup_premium_history()
     except:
         return {"code": -1, "message": "User doesn't exist."}
 payment_was_successful.connect(paypal_payment_history_sync)
+logging.debug(" ---> ~SN~FBHooking up signal ~SB%s~SN." % payment_was_successful.receivers)
+
+def paypal_payment_was_flagged(sender, **kwargs):
+    ipn_obj = sender
+    try:
+        user = User.objects.get(username__iexact=ipn_obj.custom)
+    except User.DoesNotExist:
+        user = User.objects.get(email__iexact=ipn_obj.payer_email)
+    logging.user(user, "~BC~SB~FBPaypal subscription payment flagged")
+    try:
+        user.profile.setup_premium_history()
+    except:
+        return {"code": -1, "message": "User doesn't exist."}
+payment_was_flagged.connect(paypal_payment_was_flagged)
+
+def paypal_recurring_payment_history_sync(sender, **kwargs):
+    ipn_obj = sender
+    try:
+        user = User.objects.get(username__iexact=ipn_obj.custom)
+    except User.DoesNotExist:
+        user = User.objects.get(email__iexact=ipn_obj.payer_email)
+    logging.user(user, "~BC~SB~FBPaypal subscription recurring payment")
+    try:
+        user.profile.setup_premium_history()
+    except:
+        return {"code": -1, "message": "User doesn't exist."}
+recurring_payment.connect(paypal_recurring_payment_history_sync)
 
 def stripe_signup(sender, full_json, **kwargs):
     stripe_id = full_json['data']['object']['customer']
     try:
         profile = Profile.objects.get(stripe_id=stripe_id)
+        logging.user(profile.user, "~BC~SB~FBStripe subscription signup")
         profile.activate_premium()
     except Profile.DoesNotExist:
         return {"code": -1, "message": "User doesn't exist."}
@@ -737,6 +769,7 @@ def stripe_payment_history_sync(sender, full_json, **kwargs):
     stripe_id = full_json['data']['object']['customer']
     try:
         profile = Profile.objects.get(stripe_id=stripe_id)
+        logging.user(profile.user, "~BC~SB~FBStripe subscription payment")
         profile.setup_premium_history()
     except Profile.DoesNotExist:
         return {"code": -1, "message": "User doesn't exist."}    
@@ -816,20 +849,44 @@ class PaymentHistory(models.Model):
         }
     
     @classmethod
-    def report(cls, months=12):
+    def report(cls, months=24):
         total = cls.objects.all().aggregate(sum=Sum('payment_amount'))
         print "Total: $%s" % total['sum']
         
-        for m in range(months):
+        for m in reversed(range(months)):
             now = datetime.datetime.now()
-            start_date = now - datetime.timedelta(days=(m+1)*30)
-            end_date = now - datetime.timedelta(days=m*30)
-            payments = cls.objects.filter(payment_date__gte=start_date, payment_date__lte=end_date)
+            start_date = datetime.datetime(now.year, now.month, 1) - dateutil.relativedelta.relativedelta(months=m)
+            end_time = start_date + datetime.timedelta(days=31)
+            end_date = datetime.datetime(end_time.year, end_time.month, 1) - datetime.timedelta(seconds=1)
+            payments = PaymentHistory.objects.filter(payment_date__gte=start_date, payment_date__lte=end_date)
             payments = payments.aggregate(avg=Avg('payment_amount'), 
                                           sum=Sum('payment_amount'), 
                                           count=Count('user'))
-            print "%s months ago: avg=$%s sum=$%s users=%s" % (
-                m, payments['avg'], payments['sum'], payments['count'])
+            print "%s-%02d-%02d - %s-%02d-%02d:\t$%.2f\t$%-6s\t%-4s" % (
+                start_date.year, start_date.month, start_date.day,
+                end_date.year, end_date.month, end_date.day,
+                round(payments['avg'], 2), payments['sum'], payments['count'])
+
+
+class MRedeemedCode(mongo.Document):
+    user_id = mongo.IntField()
+    gift_code = mongo.StringField()
+    redeemed_date = mongo.DateTimeField(default=datetime.datetime.now)
+    
+    meta = {
+        'collection': 'redeemed_codes',
+        'allow_inheritance': False,
+        'indexes': ['user_id', 'gift_code', 'redeemed_date'],
+    }
+    
+    def __unicode__(self):
+        return "%s redeemed %s on %s" % (self.user_id, self.gift_code, self.redeemed_date)
+    
+    @classmethod
+    def record(cls, user_id, gift_code):
+        cls.objects.create(user_id=user_id, 
+                           gift_code=gift_code)
+
 
 class RNewUserQueue:
     

@@ -21,6 +21,7 @@
 #import "AddSiteViewController.h"
 #import "MoveSiteViewController.h"
 #import "TrainerViewController.h"
+#import "UserTagsViewController.h"
 #import "OriginalStoryViewController.h"
 #import "ShareViewController.h"
 #import "UserProfileViewController.h"
@@ -32,6 +33,8 @@
 #import "FirstTimeUserAddSitesViewController.h"
 #import "FirstTimeUserAddFriendsViewController.h"
 #import "FirstTimeUserAddNewsBlurViewController.h"
+#import "TUSafariActivity.h"
+#import "ARChromeActivity.h"
 #import "MBProgressHUD.h"
 #import "Utilities.h"
 #import "StringHelper.h"
@@ -53,11 +56,15 @@
 #import "TMCache.h"
 #import "StoriesCollection.h"
 #import "NSString+HTML.h"
+#import "UIView+ViewController.h"
+#import "UIViewController+OSKUtilities.h"
+#import "NBURLCache.h"
+#import "NBActivityItemProvider.h"
 #import <float.h>
 
 @implementation NewsBlurAppDelegate
 
-#define CURRENT_DB_VERSION 31
+#define CURRENT_DB_VERSION 33
 
 @synthesize window;
 
@@ -73,7 +80,6 @@
 @synthesize feedsMenuViewController;
 @synthesize feedDetailViewController;
 @synthesize feedDetailMenuViewController;
-@synthesize feedDashboardViewController;
 @synthesize friendsListViewController;
 @synthesize fontSettingsViewController;
 @synthesize storyDetailViewController;
@@ -83,16 +89,19 @@
 @synthesize addSiteViewController;
 @synthesize moveSiteViewController;
 @synthesize trainerViewController;
+@synthesize userTagsViewController;
 @synthesize originalStoryViewController;
 @synthesize originalStoryViewNavController;
 @synthesize userProfileViewController;
 @synthesize preferencesViewController;
+@synthesize popoverController;
 
 @synthesize firstTimeUserViewController;
 @synthesize firstTimeUserAddSitesViewController;
 @synthesize firstTimeUserAddFriendsViewController;
 @synthesize firstTimeUserAddNewsBlurViewController;
 
+@synthesize tintColor;
 @synthesize feedDetailPortraitYCoordinate;
 @synthesize cachedFavicons;
 @synthesize cachedStoryImages;
@@ -109,6 +118,7 @@
 @synthesize popoverHasFeedView;
 @synthesize inFeedDetail;
 @synthesize inStoryDetail;
+@synthesize isPresentingActivities;
 @synthesize activeComment;
 @synthesize activeShareType;
 
@@ -124,6 +134,8 @@
 @synthesize readStories;
 @synthesize unreadStoryHashes;
 @synthesize folderCountCache;
+@synthesize collapsedFolders;
+@synthesize fontDescriptorTitleSize;
 
 @synthesize dictFolders;
 @synthesize dictFeeds;
@@ -183,6 +195,7 @@
     
     [window makeKeyAndVisible];
     
+    [self setTintColor:UIColorFromRGB(0x8F918B)];
     [[UINavigationBar appearance] setBarTintColor:UIColorFromRGB(0xE3E6E0)];
     [[UIToolbar appearance] setBarTintColor:      UIColorFromRGB(0xE3E6E0)];
     [[UISegmentedControl appearance] setTintColor:UIColorFromRGB(0x8F918B)];
@@ -207,11 +220,18 @@
     
     cachedFavicons = [[TMCache alloc] initWithName:@"NBFavicons"];
     cachedStoryImages = [[TMCache alloc] initWithName:@"NBStoryImages"];
-
+    
+    NBURLCache *urlCache = [[NBURLCache alloc] init];
+    [NSURLCache setSharedURLCache:urlCache];
+    // Uncomment below line to test image caching
+//    [[NSURLCache sharedURLCache] removeAllCachedResponses];
+    
 	return YES;
 }
 
 - (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    
     self.title = @"All";
 }
 
@@ -412,8 +432,9 @@
     UINavigationController *navController = [[UINavigationController alloc] initWithRootViewController:preferencesViewController];
     self.modalNavigationController = navController;
     self.modalNavigationController.navigationBar.translucent = NO;
-    
+
     if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+        [masterContainerViewController dismissViewControllerAnimated:NO completion:nil];
         self.modalNavigationController.modalPresentationStyle = UIModalPresentationFormSheet;
         [masterContainerViewController presentViewController:modalNavigationController animated:YES completion:nil];
     } else {
@@ -430,6 +451,7 @@
     self.modalNavigationController.navigationBar.translucent = NO;
     
     if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+        [masterContainerViewController dismissViewControllerAnimated:NO completion:nil];
         self.modalNavigationController.modalPresentationStyle = UIModalPresentationFormSheet;
         [masterContainerViewController presentViewController:modalNavigationController animated:YES completion:nil];
     } else {
@@ -469,156 +491,260 @@
              title:(NSString *)title
          feedTitle:(NSString *)feedTitle
             images:(NSArray *)images {
-    OSKShareableContent *content = [[OSKShareableContent alloc] init];
     
-    text = text ? text : @"";
-    content.title = [NSString stringWithFormat:@"%@", title];
-    
-    OSKMicroblogPostContentItem *microblogPost = [[OSKMicroblogPostContentItem alloc] init];
-    microblogPost.text = [NSString stringWithFormat:@"%@ %@", title, [url absoluteString]];
-    microblogPost.images = [activeStory objectForKey:@"story_images"];;
-    content.microblogPostItem = microblogPost;
-    
-    OSKCopyToPasteboardContentItem *copyTextToPasteboard = [[OSKCopyToPasteboardContentItem alloc] init];
-    copyTextToPasteboard.text = text;
-    copyTextToPasteboard.alternateActivityName = @"Copy Text";
-    content.pasteboardItem = copyTextToPasteboard;
-    
-    OSKCopyToPasteboardContentItem *copyURLToPasteboard = [[OSKCopyToPasteboardContentItem alloc] init];
-    copyURLToPasteboard.text = [url absoluteString];
-    copyURLToPasteboard.alternateActivityName = @"Copy URL";
-    if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
-        copyURLToPasteboard.alternateActivityIcon = [UIImage imageNamed:@"osk-copyIcon-purple-76.png"];
-    } else {
-        copyURLToPasteboard.alternateActivityIcon = [UIImage imageNamed:@"osk-copyIcon-purple-60.png"];
-    }
-    
-    OSKCopyToPasteboardContentItem *copyTitleToPasteboard = [[OSKCopyToPasteboardContentItem alloc] init];
-    copyTitleToPasteboard.text = title;
-    copyTitleToPasteboard.alternateActivityName = @"Copy Title";
-    if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
-        copyURLToPasteboard.alternateActivityIcon = [UIImage imageNamed:@"osk-copyIcon-purple-76.png"];
-    } else {
-        copyURLToPasteboard.alternateActivityIcon = [UIImage imageNamed:@"osk-copyIcon-purple-60.png"];
-    }
-    
-    content.additionalItems = @[copyURLToPasteboard, copyTitleToPasteboard];
-    
-    OSKEmailContentItem *emailItem = [[OSKEmailContentItem alloc] init];
-    NSString *maybeFeedTitle = feedTitle ? [NSString stringWithFormat:@" via %@", feedTitle] : @"";
-    emailItem.body = [NSString stringWithFormat:@"<br><br><hr style=\"border: none; overflow: hidden; height: 1px;width: 100%%;background-color: #C0C0C0;\"><br><a href=\"%@\">%@</a>%@<br>%@", [url absoluteString], title, maybeFeedTitle, text];
-    emailItem.subject = title;
-    emailItem.isHTML = YES;
-    content.emailItem = emailItem;
-    
-    OSKSMSContentItem *smsItem = [[OSKSMSContentItem alloc] init];
-    smsItem.body = [NSString stringWithFormat:@"%@\n%@", title, [url absoluteString]];;
-    content.smsItem = smsItem;
-    
-    OSKReadLaterContentItem *readLater = [[OSKReadLaterContentItem alloc] init];
-    readLater.url = url;
-    content.readLaterItem = readLater;
-    
-    OSKToDoListEntryContentItem *toDoList = [[OSKToDoListEntryContentItem alloc] init];
-    toDoList.title = [NSString stringWithFormat:@"Read \"%@\"", title];
-    toDoList.notes = [NSString stringWithFormat:@"%@\n\n%@", text, [url absoluteString]];
-    content.toDoListItem = toDoList;
-    
-    OSKLinkBookmarkContentItem *linkBookmarking = [[OSKLinkBookmarkContentItem alloc] init];
-    linkBookmarking.url = readLater.url;
-    linkBookmarking.title = title;
-    NSString *appName = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleDisplayName"];
-    NSMutableArray *tags = [NSMutableArray arrayWithObject:appName];
-    [tags addObjectsFromArray:[activeStory objectForKey:@"story_tags"]];
-    linkBookmarking.tags = tags;
-    linkBookmarking.markToRead = YES;
-    content.linkBookmarkItem = linkBookmarking;
-    
-    OSKWebBrowserContentItem *browserItem = [[OSKWebBrowserContentItem alloc] init];
-    browserItem.url = readLater.url;
-    content.webBrowserItem = browserItem;
-    
-    OSKPasswordManagementAppSearchContentItem *passwordSearchItem = [[OSKPasswordManagementAppSearchContentItem alloc] init];
-    passwordSearchItem.query = [url host];
-    content.passwordSearchItem = passwordSearchItem;
-    
-    if (images.count) {
-        OSKAirDropContentItem *airDrop = [[OSKAirDropContentItem alloc] init];
-        airDrop.items = images;
-        content.airDropItem = airDrop;
-    }
-    else if ([url absoluteString].length) {
-        OSKAirDropContentItem *airDrop = [[OSKAirDropContentItem alloc] init];
-        airDrop.items = @[[url absoluteString]];
-        content.airDropItem = airDrop;
-    }
-    else if (text.length) {
-        OSKAirDropContentItem *airDrop = [[OSKAirDropContentItem alloc] init];
-        airDrop.items = @[text];
-        content.airDropItem = airDrop;
-    }
-    
-    
-    OSKActivityCompletionHandler completionHandler = ^(OSKActivity *activity, BOOL successful, NSError *error){
-        if (!successful) return;
+    if (!NSClassFromString(@"UIPopoverPresentationController")) {
+        // iOS 7
+        OSKShareableContent *content = [[OSKShareableContent alloc] init];
         
-        NSString *activityType = [activity.class activityType];
-        NSString *_completedString;
+        text = text ? text : @"";
+        content.title = [NSString stringWithFormat:@"%@", title];
         
-        if ([activityType isEqualToString:OSKActivityType_iOS_Twitter]) {
-            _completedString = @"Posted";
-        } else if ([activityType isEqualToString:OSKActivityType_iOS_Facebook]) {
-            _completedString = @"Posted";
-        } else if ([activityType isEqualToString:OSKActivityType_iOS_Email]) {
-            _completedString = @"Sent";
-        } else if ([activityType isEqualToString:OSKActivityType_iOS_SMS]) {
-            _completedString = @"Sent";
-        } else if ([activityType isEqualToString:OSKActivityType_iOS_CopyToPasteboard]) {
-            _completedString = @"Copied";
-        } else if ([activityType isEqualToString:OSKActivityType_API_Instapaper]) {
-            _completedString = @"Saved to Instapaper";
-        } else if ([activityType isEqualToString:OSKActivityType_API_Pocket]) {
-            _completedString = @"Saved to Pocket";
-        } else if ([activityType isEqualToString:OSKActivityType_API_Readability]) {
-            _completedString = @"Saved to Readability";
-        } else if ([activityType isEqualToString:OSKActivityType_API_Pinboard]) {
-            _completedString = @"Saved to Pinboard";
-        } else if ([activityType isEqualToString:OSKActivityType_iOS_AirDrop]) {
-            _completedString = @"Airdropped";
-        } else if ([activityType isEqualToString:OSKActivityType_iOS_Safari]) {
-            return;
-        } else if ([activityType isEqualToString:OSKActivityType_URLScheme_Chrome]) {
-            return;
+        OSKMicroblogPostContentItem *microblogPost = [[OSKMicroblogPostContentItem alloc] init];
+        microblogPost.text = [NSString stringWithFormat:@"%@ %@", title, [url absoluteString]];
+        microblogPost.images = [activeStory objectForKey:@"story_images"];;
+        content.microblogPostItem = microblogPost;
+        
+        OSKCopyToPasteboardContentItem *copyTextToPasteboard = [[OSKCopyToPasteboardContentItem alloc] init];
+        copyTextToPasteboard.text = text;
+        copyTextToPasteboard.alternateActivityName = @"Copy Text";
+        content.pasteboardItem = copyTextToPasteboard;
+        
+        OSKCopyToPasteboardContentItem *copyURLToPasteboard = [[OSKCopyToPasteboardContentItem alloc] init];
+        copyURLToPasteboard.text = [url absoluteString];
+        copyURLToPasteboard.alternateActivityName = @"Copy URL";
+        if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
+            copyURLToPasteboard.alternateActivityIcon = [UIImage imageNamed:@"osk-copyIcon-purple-76.png"];
         } else {
-            _completedString = @"Saved";
+            copyURLToPasteboard.alternateActivityIcon = [UIImage imageNamed:@"osk-copyIcon-purple-60.png"];
         }
-        [MBProgressHUD hideHUDForView:vc.view animated:NO];
-        MBProgressHUD *storyHUD = [MBProgressHUD showHUDAddedTo:vc.view animated:YES];
-        storyHUD.customView = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"37x-Checkmark.png"]];
-        storyHUD.mode = MBProgressHUDModeCustomView;
-        storyHUD.removeFromSuperViewOnHide = YES;
-        storyHUD.labelText = _completedString;
-        [storyHUD hide:YES afterDelay:1];
-    };
-    
-    [[OSKActivitiesManager sharedInstance] setCustomizationsDelegate:self];
-    
-    NSDictionary *options = @{OSKPresentationOption_ActivityCompletionHandler: completionHandler};
-    
-    if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
-        [self.masterContainerViewController showSendToPopover:vc];
-        if ([sender isKindOfClass:[UIBarButtonItem class]]) {
-            [[OSKPresentationManager sharedInstance] presentActivitySheetForContent:content presentingViewController:self.masterContainerViewController popoverFromBarButtonItem:sender permittedArrowDirections:UIPopoverArrowDirectionAny animated:YES options:options];
+        
+        OSKCopyToPasteboardContentItem *copyTitleToPasteboard = [[OSKCopyToPasteboardContentItem alloc] init];
+        copyTitleToPasteboard.text = title;
+        copyTitleToPasteboard.alternateActivityName = @"Copy Title";
+        if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
+            copyURLToPasteboard.alternateActivityIcon = [UIImage imageNamed:@"osk-copyIcon-purple-76.png"];
         } else {
-            [[OSKPresentationManager sharedInstance] presentActivitySheetForContent:content presentingViewController:vc popoverFromRect:[sender frame] inView:[sender superview] permittedArrowDirections:UIPopoverArrowDirectionAny animated:YES options:options];
+            copyURLToPasteboard.alternateActivityIcon = [UIImage imageNamed:@"osk-copyIcon-purple-60.png"];
         }
+        
+        content.additionalItems = @[copyURLToPasteboard, copyTitleToPasteboard];
+        
+        OSKEmailContentItem *emailItem = [[OSKEmailContentItem alloc] init];
+        NSString *maybeFeedTitle = feedTitle ? [NSString stringWithFormat:@" via %@", feedTitle] : @"";
+        emailItem.body = [NSString stringWithFormat:@"<br><br><hr style=\"border: none; overflow: hidden; height: 1px;width: 100%%;background-color: #C0C0C0;\"><br><a href=\"%@\">%@</a>%@<br>%@", [url absoluteString], title, maybeFeedTitle, text];
+        emailItem.subject = title;
+        emailItem.isHTML = YES;
+        content.emailItem = emailItem;
+        
+        OSKSMSContentItem *smsItem = [[OSKSMSContentItem alloc] init];
+        smsItem.body = [NSString stringWithFormat:@"%@\n%@", title, [url absoluteString]];;
+        content.smsItem = smsItem;
+        
+        OSKReadLaterContentItem *readLater = [[OSKReadLaterContentItem alloc] init];
+        readLater.url = url;
+        content.readLaterItem = readLater;
+        
+        OSKToDoListEntryContentItem *toDoList = [[OSKToDoListEntryContentItem alloc] init];
+        toDoList.title = [NSString stringWithFormat:@"Read \"%@\"", title];
+        toDoList.notes = [NSString stringWithFormat:@"%@\n\n%@", text, [url absoluteString]];
+        content.toDoListItem = toDoList;
+        
+        OSKLinkBookmarkContentItem *linkBookmarking = [[OSKLinkBookmarkContentItem alloc] init];
+        linkBookmarking.url = readLater.url;
+        linkBookmarking.title = title;
+        NSString *appName = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleDisplayName"];
+        NSMutableArray *tags = [NSMutableArray arrayWithObject:appName];
+        [tags addObjectsFromArray:[activeStory objectForKey:@"story_tags"]];
+        linkBookmarking.tags = tags;
+        linkBookmarking.markToRead = YES;
+        content.linkBookmarkItem = linkBookmarking;
+        
+        OSKWebBrowserContentItem *browserItem = [[OSKWebBrowserContentItem alloc] init];
+        browserItem.url = readLater.url;
+        content.webBrowserItem = browserItem;
+        
+        OSKPasswordManagementAppSearchContentItem *passwordSearchItem = [[OSKPasswordManagementAppSearchContentItem alloc] init];
+        passwordSearchItem.query = [url host];
+        content.passwordSearchItem = passwordSearchItem;
+        
+        if (images.count) {
+            OSKAirDropContentItem *airDrop = [[OSKAirDropContentItem alloc] init];
+            airDrop.items = images;
+            content.airDropItem = airDrop;
+        }
+        else if ([url absoluteString].length) {
+            OSKAirDropContentItem *airDrop = [[OSKAirDropContentItem alloc] init];
+            airDrop.items = @[[url absoluteString]];
+            content.airDropItem = airDrop;
+        }
+        else if (text.length) {
+            OSKAirDropContentItem *airDrop = [[OSKAirDropContentItem alloc] init];
+            airDrop.items = @[text];
+            content.airDropItem = airDrop;
+        }
+        
+        
+        OSKActivityCompletionHandler completionHandler = ^(OSKActivity *activity, BOOL successful, NSError *error){
+            self.isPresentingActivities = NO;
+            if (!successful) return;
+            
+            NSString *activityType = [activity.class activityType];
+            NSString *_completedString;
+            
+            if ([activityType isEqualToString:OSKActivityType_iOS_Twitter]) {
+                _completedString = @"Posted";
+            } else if ([activityType isEqualToString:OSKActivityType_iOS_Facebook]) {
+                _completedString = @"Posted";
+            } else if ([activityType isEqualToString:OSKActivityType_iOS_Email]) {
+                _completedString = @"Sent";
+            } else if ([activityType isEqualToString:OSKActivityType_iOS_SMS]) {
+                _completedString = @"Sent";
+            } else if ([activityType isEqualToString:OSKActivityType_iOS_CopyToPasteboard]) {
+                _completedString = @"Copied";
+            } else if ([activityType isEqualToString:OSKActivityType_API_Instapaper]) {
+                _completedString = @"Saved to Instapaper";
+            } else if ([activityType isEqualToString:OSKActivityType_API_Pocket]) {
+                _completedString = @"Saved to Pocket";
+            } else if ([activityType isEqualToString:OSKActivityType_API_Readability]) {
+                _completedString = @"Saved to Readability";
+            } else if ([activityType isEqualToString:OSKActivityType_API_Pinboard]) {
+                _completedString = @"Saved to Pinboard";
+            } else if ([activityType isEqualToString:OSKActivityType_iOS_AirDrop]) {
+                _completedString = @"Airdropped";
+            } else if ([activityType isEqualToString:OSKActivityType_iOS_Safari]) {
+                return;
+            } else if ([activityType isEqualToString:OSKActivityType_URLScheme_Chrome]) {
+                return;
+            } else {
+                _completedString = @"Saved";
+            }
+            [MBProgressHUD hideHUDForView:vc.view animated:NO];
+            MBProgressHUD *storyHUD = [MBProgressHUD showHUDAddedTo:vc.view animated:YES];
+            storyHUD.customView = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"37x-Checkmark.png"]];
+            storyHUD.mode = MBProgressHUDModeCustomView;
+            storyHUD.removeFromSuperViewOnHide = YES;
+            storyHUD.labelText = _completedString;
+            [storyHUD hide:YES afterDelay:1];
+        };
+        
+        [[OSKActivitiesManager sharedInstance] setCustomizationsDelegate:self];
+        
+        NSDictionary *options = @{OSKPresentationOption_ActivityCompletionHandler: completionHandler};
+        
+        if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+            [self.masterContainerViewController showSendToPopover:vc];
+            if ([sender isKindOfClass:[UIBarButtonItem class]]) {
+                [[OSKPresentationManager sharedInstance] presentActivitySheetForContent:content presentingViewController:self.masterContainerViewController popoverFromBarButtonItem:sender permittedArrowDirections:UIPopoverArrowDirectionAny animated:YES options:options];
+            } else if ([sender isKindOfClass:[NSValue class]]) {
+                // Uncomment below to show share popover from linked text. Problem is
+                // that on finger up the link will open.
+                //            CGPoint pt = [(NSValue *)sender CGPointValue];
+                //            CGRect rect = CGRectMake(pt.x, pt.y, 1, 1);
+                //            [[OSKPresentationManager sharedInstance] presentActivitySheetForContent:content presentingViewController:vc popoverFromRect:rect inView:self.storyPageControl.view permittedArrowDirections:UIPopoverArrowDirectionAny animated:YES options:options];
+                
+                [[OSKPresentationManager sharedInstance] presentActivitySheetForContent:content
+                                                               presentingViewController:vc options:options];
+            } else {
+                [[OSKPresentationManager sharedInstance] presentActivitySheetForContent:content presentingViewController:vc popoverFromRect:[sender frame] inView:[sender superview] permittedArrowDirections:UIPopoverArrowDirectionAny animated:YES options:options];
+            }
+            
+        } else {
+            [[OSKPresentationManager sharedInstance] presentActivitySheetForContent:content
+                                                           presentingViewController:vc options:options];
+        }
+    } else {
+        // iOS 8+
+        NSMutableArray *activityItems = [[NSMutableArray alloc] init];
+//        if (title) [activityItems addObject:title];
+        if (url) [activityItems addObject:url];
+        NSString *maybeFeedTitle = feedTitle ? [NSString stringWithFormat:@" via %@", feedTitle] : @"";
+        if (text) text = [NSString stringWithFormat:@"<html><body><br><br><hr style=\"border: none; overflow: hidden; height: 1px;width: 100%%;background-color: #C0C0C0;\"><br><a href=\"%@\">%@</a>%@<br>%@</body></html>", [url absoluteString], title, maybeFeedTitle, text];
+    //    if (images) [activityItems addObject:images];
+        NSMutableArray *appActivities = [[NSMutableArray alloc] init];
+        [activityItems addObject:[[NBActivityItemProvider alloc] initWithUrl:(NSURL *)url
+                                                              authorName:(NSString *)authorName
+                                                                    text:(NSString *)text
+                                                                   title:(NSString *)title
+                                                               feedTitle:(NSString *)feedTitle
+                                                                  images:(NSArray *)images]];
+        if (url) [appActivities addObject:[[TUSafariActivity alloc] init]];
+        if (url) [appActivities addObject:[[ARChromeActivity alloc]
+                                           initWithCallbackURL:[NSURL URLWithString:@"newsblur://"]]];
+        
+        UIActivityViewController *activityViewController = [[UIActivityViewController alloc]
+                                                            initWithActivityItems:activityItems
+                                                            applicationActivities:appActivities];
+        [activityViewController setTitle:title];
+        void (^completion)(NSString *, BOOL) = ^void(NSString *activityType, BOOL completed){
+            self.isPresentingActivities = NO;
 
-    } else {
-        [[OSKPresentationManager sharedInstance] presentActivitySheetForContent:content
-                                                       presentingViewController:vc options:options];
+            NSString *_completedString;
+            NSLog(@"activityType: %@", activityType);
+            if (!activityType) return;
+            
+            if ([activityType isEqualToString:UIActivityTypePostToTwitter]) {
+                _completedString = @"Posted";
+            } else if ([activityType isEqualToString:UIActivityTypePostToFacebook]) {
+                _completedString = @"Posted";
+            } else if ([activityType isEqualToString:UIActivityTypeMail]) {
+                _completedString = @"Sent";
+            } else if ([activityType isEqualToString:UIActivityTypeMessage]) {
+                _completedString = @"Sent";
+            } else if ([activityType isEqualToString:UIActivityTypeCopyToPasteboard]) {
+                _completedString = @"Copied";
+            } else if ([activityType isEqualToString:UIActivityTypeAirDrop]) {
+                _completedString = @"Airdropped";
+            } else if ([activityType isEqualToString:@"TUSafariActivity"]) {
+                return;
+            } else if ([activityType isEqualToString:@"ARChromeActivity"]) {
+                return;
+            } else {
+                _completedString = @"Saved";
+            }
+            [MBProgressHUD hideHUDForView:vc.view animated:NO];
+            if (completed) {
+                MBProgressHUD *storyHUD = [MBProgressHUD showHUDAddedTo:vc.view animated:YES];
+                storyHUD.customView = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"37x-Checkmark.png"]];
+                storyHUD.mode = MBProgressHUDModeCustomView;
+                storyHUD.removeFromSuperViewOnHide = YES;
+                storyHUD.labelText = _completedString;
+                [storyHUD hide:YES afterDelay:1];
+            }
+        };
+        [activityViewController setCompletionHandler:completion];
+
+        if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+            [self.masterContainerViewController presentViewController:activityViewController animated: YES completion:nil];
+            activityViewController.modalPresentationStyle = UIModalPresentationPopover;
+            // iOS 8+
+            UIPopoverPresentationController *popPC = activityViewController.popoverPresentationController;
+            popPC.permittedArrowDirections = UIPopoverArrowDirectionAny;
+            
+            if ([sender isKindOfClass:[UIBarButtonItem class]]) {
+                popPC.barButtonItem = sender;
+            } else if ([sender isKindOfClass:[NSValue class]]) {
+                //            // Uncomment below to show share popover from linked text. Problem is
+                //            // that on finger up the link will open.
+                CGPoint pt = [(NSValue *)sender CGPointValue];
+                CGRect rect = CGRectMake(pt.x, pt.y, 1, 1);
+                ////            [[OSKPresentationManager sharedInstance] presentActivitySheetForContent:content presentingViewController:vc popoverFromRect:rect inView:self.storyPageControl.view permittedArrowDirections:UIPopoverArrowDirectionAny animated:YES options:options];
+                
+                //            [[OSKPresentationManager sharedInstance] presentActivitySheetForContent:content
+                //                                                           presentingViewController:vc options:options];
+                popPC.sourceRect = rect;
+                popPC.sourceView = self.storyPageControl.view;
+            } else {
+                popPC.sourceRect = [sender frame];
+                popPC.sourceView = [sender superview];
+                
+                //            [[OSKPresentationManager sharedInstance] presentActivitySheetForContent:content presentingViewController:vc popoverFromRect:[sender frame] inView:[sender superview] permittedArrowDirections:UIPopoverArrowDirectionAny animated:YES options:options];
+            }
+        } else {
+            [self.navigationController presentViewController:activityViewController animated:YES completion:nil];
+        }
     }
+    self.isPresentingActivities = YES;
 }
-
 
 - (OSKApplicationCredential *)applicationCredentialForActivityType:(NSString *)activityType {
     OSKApplicationCredential *appCredential = nil;
@@ -685,10 +811,9 @@
 - (void)showSendToManagement {
     OSKAccountManagementViewController *manager = [[OSKAccountManagementViewController alloc] initWithIgnoredActivityClasses:nil optionalBespokeActivityClasses:nil];
     OSKNavigationController *navController = [[OSKNavigationController alloc] initWithRootViewController:manager];
-    if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
-        [navController setModalPresentationStyle:UIModalPresentationFormSheet];
-    }
     if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+        [masterContainerViewController dismissViewControllerAnimated:NO completion:nil];
+        [navController setModalPresentationStyle:UIModalPresentationFormSheet];
         [self.masterContainerViewController presentViewController:navController animated:YES completion:nil];
     } else {
         [self.navigationController presentViewController:navController animated:YES completion:nil];
@@ -753,6 +878,7 @@
     self.ftuxNavigationController.navigationBar.translucent = NO;
     
     if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+        [masterContainerViewController dismissViewControllerAnimated:NO completion:nil];
         self.ftuxNavigationController.modalPresentationStyle = UIModalPresentationFormSheet;
         [self.masterContainerViewController presentViewController:self.ftuxNavigationController animated:YES completion:nil];
         
@@ -773,6 +899,7 @@
     UINavigationController *navController = self.navigationController;
     
     if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+        [masterContainerViewController dismissViewControllerAnimated:NO completion:nil];
         moveSiteViewController.modalPresentationStyle=UIModalPresentationFormSheet;
         [navController presentViewController:moveSiteViewController animated:YES completion:nil];
     } else {
@@ -827,6 +954,49 @@
     }
 }
 
+- (void)openUserTagsStory:(id)sender {
+    if (!self.userTagsViewController) {
+        self.userTagsViewController = [[UserTagsViewController alloc] init];
+    }
+    
+    if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+        [self.masterContainerViewController showUserTagsPopover:sender];
+    } else {
+        if (self.popoverController == nil) {
+            self.popoverController = [[WYPopoverController alloc]
+                                      initWithContentViewController:self.userTagsViewController];
+            
+            self.popoverController.delegate = self;
+        } else {
+            [self.popoverController dismissPopoverAnimated:YES];
+            self.popoverController = nil;
+        }
+        
+        [self.userTagsViewController view]; // Force viewDidLoad
+        [self.popoverController setPopoverContentSize:CGSizeMake(220, 38 * MIN(6.5, [[self.dictSavedStoryTags allKeys] count]+0.5))];
+        CGRect frame = [sender CGRectValue];
+        [self.popoverController presentPopoverFromRect:frame
+                                                inView:self.storyPageControl.currentPage.view
+                              permittedArrowDirections:WYPopoverArrowDirectionAny
+                                              animated:YES];
+    }
+}
+
+#pragma mark -
+#pragma mark WYPopoverControllerDelegate implementation
+
+- (void)popoverControllerDidDismissPopover:(WYPopoverController *)thePopoverController {
+    //Safe to release the popover here
+    self.popoverController = nil;
+}
+
+- (BOOL)popoverControllerShouldDismissPopover:(WYPopoverController *)thePopoverController {
+    //The popover is automatically dismissed if you click outside it, unless you return NO here
+    return YES;
+}
+
+#pragma mark -
+
 - (void)reloadFeedsView:(BOOL)showLoader {
     [feedsViewController fetchFeedList:showLoader];
 }
@@ -836,8 +1006,6 @@
 }
 
 - (void)loadFeedDetailView:(BOOL)transition {
-    [storiesCollection setStories:nil];
-    [storiesCollection setFeedUserProfiles:nil];
     self.inFeedDetail = YES;    
     popoverHasFeedView = YES;
 
@@ -875,14 +1043,6 @@
                      isSocial:(BOOL)social
                      withUser:(NSDictionary *)user
              showFindingStory:(BOOL)showHUD {
-    if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPhone) {
-        [self.navigationController popToRootViewControllerAnimated:NO];
-        [self.navigationController dismissViewControllerAnimated:YES completion:nil];
-        if (self.feedsViewController.popoverController) {
-            [self.feedsViewController.popoverController dismissPopoverAnimated:NO];
-        }
-    }
-    
     NSDictionary *feed = [self getFeed:feedId];
     
     if (social) {
@@ -907,15 +1067,20 @@
     storiesCollection.activeFeed = feed;
     storiesCollection.activeFolder = nil;
     
-    [self loadFeedDetailView];
-    
-    if (showHUD) {
-        if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
-            [self.storyPageControl showShareHUD:@"Finding story..."];
+    if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+        [self loadFeedDetailView];
+    } else if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPhone) {
+        [self.navigationController popToRootViewControllerAnimated:NO];
+        if (self.feedsViewController.popoverController) {
+            [self.feedsViewController.popoverController dismissPopoverAnimated:YES];
+        }
+        if (self.navigationController.presentedViewController) {
+            [self.navigationController dismissViewControllerAnimated:YES completion:^{
+                [self loadFeedDetailView];
+            }];
         } else {
-            MBProgressHUD *HUD = [MBProgressHUD showHUDAddedTo:self.feedDetailViewController.view animated:YES];
-            HUD.labelText = @"Finding story...";
-        }        
+            [self loadFeedDetailView];
+        }
     }
 }
 
@@ -990,6 +1155,7 @@
         UINavigationController *connectNav = [[UINavigationController alloc]
                                               initWithRootViewController:serviceVC];
         self.modalNavigationController = connectNav;
+        [masterContainerViewController dismissViewControllerAnimated:NO completion:nil];
         self.modalNavigationController.modalPresentationStyle = UIModalPresentationFormSheet;
         self.modalNavigationController.navigationBar.translucent = NO;
         [self.masterContainerViewController presentViewController:modalNavigationController
@@ -1111,6 +1277,7 @@
             [feedDetailView.storiesCollection setActiveFolder:@"everything"];
             for (NSString *folderName in self.feedsViewController.activeFeedLocations) {
                 if ([folderName isEqualToString:@"river_blurblogs"]) continue;
+                if ([folderName isEqualToString:@"read_stories"]) continue;
                 if ([folderName isEqualToString:@"saved_stories"]) continue;
                 NSArray *originalFolder = [self.dictFolders objectForKey:folderName];
                 NSArray *folderFeeds = [self.feedsViewController.activeFeedLocations objectForKey:folderName];
@@ -1123,10 +1290,15 @@
             feedDetailView.storiesCollection.isRiverView = YES;
             NSString *folderName = [self.dictFoldersArray objectAtIndex:[folder intValue]];
             
-            if ([folderName isEqualToString:@"saved_stories"]) {
+            if ([folder isEqualToString:@"saved_stories"] || [folderName isEqualToString:@"saved_stories"]) {
                 feedDetailView.storiesCollection.isSavedView = YES;
+                [feedDetailView.storiesCollection setActiveFolder:@"saved_stories"];
+            } else if ([folder isEqualToString:@"read_stories"] || [folderName isEqualToString:@"read_stories"]) {
+                feedDetailView.storiesCollection.isReadView = YES;
+                [feedDetailView.storiesCollection setActiveFolder:@"read_stories"];
+            } else {
+                [feedDetailView.storiesCollection setActiveFolder:folderName];
             }
-            [feedDetailView.storiesCollection setActiveFolder:folderName];
             NSArray *originalFolder = [self.dictFolders objectForKey:folderName];
             NSArray *activeFeedLocations = [self.feedsViewController.activeFeedLocations objectForKey:folderName];
             for (int l=0; l < [activeFeedLocations count]; l++) {
@@ -1304,19 +1476,6 @@
     }
         
     [MBProgressHUD hideHUDForView:self.storyPageControl.view animated:YES];
-}
-
-- (void)navigationController:(UINavigationController *)navController 
-      willShowViewController:(UIViewController *)viewController animated:(BOOL)animated {
-    if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
-         [viewController viewWillAppear:animated];
-    }
-}
-
-- (void)navigationController:(UINavigationController *)navigationController didShowViewController:(UIViewController *)viewController animated:(BOOL)animated {
-    if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
-        [viewController viewDidAppear:animated];
-    }    
 }
 
 - (void)setTitle:(NSString *)title {
@@ -1562,6 +1721,21 @@
     [self.folderCountCache setObject:[NSNumber numberWithInt:counts.ng] forKey:[NSString stringWithFormat:@"%@-ng", folderName]];
         
     return counts;
+}
+
+- (BOOL)isFolderCollapsed:(NSString *)folderName {
+    if (!self.collapsedFolders) {
+        self.collapsedFolders = [[NSMutableDictionary alloc] init];
+        NSUserDefaults *userPreferences = [NSUserDefaults standardUserDefaults];
+        for (NSString *folderName in self.dictFoldersArray) {
+            NSString *collapseKey = [NSString stringWithFormat:@"folderCollapsed:%@",
+                                     folderName];
+            if ([userPreferences boolForKey:collapseKey]) {
+                [self.collapsedFolders setObject:folderName forKey:folderName];
+            }
+        }
+    }
+    return !![self.collapsedFolders objectForKey:folderName];
 }
 
 #pragma mark - Story Management
@@ -1815,6 +1989,73 @@
 }
 
 
+- (NSInteger)adjustSavedStoryCount:(NSString *)tagName direction:(NSInteger)direction {
+    NSString *savedTagId = [NSString stringWithFormat:@"saved:%@", tagName];
+    NSMutableDictionary *newTag = [[self.dictSavedStoryTags objectForKey:savedTagId] mutableCopy];
+    if (!newTag) {
+        newTag = [@{@"ps": [NSNumber numberWithInt:0],
+                    @"feed_title": tagName
+                    } mutableCopy];
+    }
+    NSInteger newCount = [[newTag objectForKey:@"ps"] integerValue] + direction;
+    [newTag setObject:[NSNumber numberWithInteger:newCount] forKey:@"ps"];
+    NSMutableDictionary *savedStoryDict = [[NSMutableDictionary alloc] init];
+    for (NSString *tagId in [self.dictSavedStoryTags allKeys]) {
+        if ([tagId isEqualToString:savedTagId]) {
+            if (newCount > 0) {
+                [savedStoryDict setObject:newTag forKey:tagId];
+            }
+        } else {
+            [savedStoryDict setObject:[self.dictSavedStoryTags objectForKey:tagId]
+                               forKey:tagId];
+        }
+    }
+    
+    // If adding a tag, it won't already be in dictSavedStoryTags
+    if (![self.dictSavedStoryTags objectForKey:savedStoryDict] && newCount > 0) {
+        [savedStoryDict setObject:newTag forKey:savedTagId];
+    }
+    self.dictSavedStoryTags = savedStoryDict;
+    
+    return newCount;
+}
+
+- (NSArray *)updateStarredStoryCounts:(NSDictionary *)results {
+    if ([results objectForKey:@"starred_count"]) {
+        self.savedStoriesCount = [[results objectForKey:@"starred_count"] intValue];
+    }
+    
+    if (!self.savedStoriesCount) return [[NSArray alloc] init];
+
+    NSMutableDictionary *savedStoryDict = [[NSMutableDictionary alloc] init];
+    NSMutableArray *savedStories = [NSMutableArray array];
+    
+    if (![results objectForKey:@"starred_counts"] ||
+        [[results objectForKey:@"starred_counts"] isKindOfClass:[NSNull class]]) {
+        return savedStories;
+    }
+    
+    for (NSDictionary *userTag in [results objectForKey:@"starred_counts"]) {
+        if ([[userTag objectForKey:@"tag"] isKindOfClass:[NSNull class]] ||
+            [[userTag objectForKey:@"tag"] isEqualToString:@""]) continue;
+        NSString *savedTagId = [NSString stringWithFormat:@"saved:%@", [userTag objectForKey:@"tag"]];
+        NSDictionary *savedTag = @{@"ps": [userTag objectForKey:@"count"],
+                                   @"feed_title": [userTag objectForKey:@"tag"],
+                                   @"id": [userTag objectForKey:@"tag"],
+                                   @"tag": [userTag objectForKey:@"tag"]};
+        [savedStories addObject:savedTagId];
+        [savedStoryDict setObject:savedTag forKey:savedTagId];
+        [self.dictUnreadCounts setObject:@{@"ps": [userTag objectForKey:@"count"],
+                                                  @"nt": [NSNumber numberWithInt:0],
+                                                  @"ng": [NSNumber numberWithInt:0]}
+                                         forKey:savedTagId];
+    }
+
+    self.dictSavedStoryTags = savedStoryDict;
+    
+    return savedStories;
+}
+
 #pragma mark -
 #pragma mark Story functions
 
@@ -1867,6 +2108,28 @@
     }
     
     return folderName;
+}
+
+- (NSArray *)parentFoldersForFeed:(NSString *)feedId {
+    NSMutableArray *folderNames = [[NSMutableArray alloc] init];
+    
+    for (NSString *folderName in self.dictFoldersArray) {
+        NSArray *folder = [self.dictFolders objectForKey:folderName];
+        if ([folder containsObject:feedId]) {
+            [folderNames addObject:[self extractFolderName:folderName]];
+            [folderNames addObject:[self extractParentFolderName:folderName]];
+        }
+    }
+    NSMutableArray *uniqueFolderNames = [[NSMutableArray alloc] init];
+    for (NSString *folderName in folderNames) {
+        if ([uniqueFolderNames containsObject:folderName]) continue;
+        if ([folderName containsString:@"Top Level"]) continue;
+        if ([folderName length] < 1) continue;
+        
+        [uniqueFolderNames addObject:folderName];
+    }
+    
+    return uniqueFolderNames;
 }
 
 - (NSDictionary *)getFeed:(NSString *)feedId {
@@ -1976,7 +2239,8 @@
     if (storiesCollection.isRiverView ||
         storiesCollection.isSocialView ||
         storiesCollection.isSocialRiverView ||
-        storiesCollection.isSavedView) {
+        storiesCollection.isSavedView ||
+        storiesCollection.isReadView) {
         gradientView = [NewsBlurAppDelegate 
                         makeGradientView:rect
                         startColor:[feed objectForKey:@"favicon_fade"] 
@@ -2043,12 +2307,14 @@
         } else {
             titleLabel.text = [NSString stringWithFormat:@"     Saved Stories - %@", storiesCollection.activeSavedStoryTag];
         }
+    } else if ([storiesCollection.activeFolder isEqualToString:@"read_stories"]) {
+        titleLabel.text = [NSString stringWithFormat:@"     Read Stories"];
     } else if ([storiesCollection.activeFolder isEqualToString:@"saved_stories"]) {
         titleLabel.text = [NSString stringWithFormat:@"     Saved Stories"];
-    } else if (storiesCollection.isRiverView) {
-        titleLabel.text = [NSString stringWithFormat:@"     %@", storiesCollection.activeFolder];
     } else if (storiesCollection.isSocialView) {
         titleLabel.text = [NSString stringWithFormat:@"     %@", [feed objectForKey:@"feed_title"]];
+    } else if (storiesCollection.isRiverView) {
+        titleLabel.text = [NSString stringWithFormat:@"     %@", storiesCollection.activeFolder];
     } else {
         titleLabel.text = [NSString stringWithFormat:@"     %@", [feed objectForKey:@"feed_title"]];
     }
@@ -2076,6 +2342,8 @@
             titleImage = [UIImage imageNamed:@"ak-icon-allstories.png"];
         } else if (storiesCollection.isSavedView && storiesCollection.activeSavedStoryTag) {
             titleImage = [UIImage imageNamed:@"tag.png"];
+        } else if ([storiesCollection.activeFolder isEqualToString:@"read_stories"]) {
+            titleImage = [UIImage imageNamed:@"g_icn_folder_read.png"];
         } else if ([storiesCollection.activeFolder isEqualToString:@"saved_stories"]) {
             titleImage = [UIImage imageNamed:@"clock.png"];
         } else if (storiesCollection.isRiverView) {
@@ -2402,6 +2670,15 @@
         //        [db executeUpdate:@"drop table if exists `queued_saved_hashes`"]; // Nope, don't clear this.
         NSLog(@"Dropped db: %@", [db lastErrorMessage]);
         sqlite3_exec(db.sqliteHandle, [[NSString stringWithFormat:@"PRAGMA user_version = %d", CURRENT_DB_VERSION] UTF8String], NULL, NULL, NULL);
+        
+        NSFileManager *fileManager = [NSFileManager defaultManager];
+        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
+        NSString *cacheDirectory = [[paths objectAtIndex:0] stringByAppendingPathComponent:@"story_images"];
+        NSError *error = nil;
+        BOOL success = [fileManager removeItemAtPath:cacheDirectory error:&error];
+        if (!success || error) {
+            // something went wrong
+        }
     }
     NSString *createAccountsTable = [NSString stringWithFormat:@"create table if not exists accounts "
                                   "("

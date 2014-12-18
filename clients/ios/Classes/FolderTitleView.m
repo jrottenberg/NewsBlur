@@ -22,6 +22,8 @@
 - (void)setNeedsDisplay {
     [unreadCount setNeedsDisplay];
     
+    fontDescriptorSize = nil;
+    
     [super setNeedsDisplay];
 }
 
@@ -99,21 +101,7 @@
     
     // Folder title
     UIColor *textColor = [UIColor colorWithRed:0.3 green:0.3 blue:0.3 alpha:1.0];
-    UIFontDescriptor *fontDescriptor = [UIFontDescriptor preferredFontDescriptorWithTextStyle: UIFontTextStyleCaption1];
-    UIFontDescriptor *boldFontDescriptor = [fontDescriptor fontDescriptorWithSymbolicTraits: UIFontDescriptorTraitBold];
-    if (![userPreferences boolForKey:@"use_system_font_size"]) {
-        if ([[userPreferences stringForKey:@"feed_list_font_size"] isEqualToString:@"xs"]) {
-            boldFontDescriptor = [boldFontDescriptor fontDescriptorWithSize:10.0f];
-        } else if ([[userPreferences stringForKey:@"feed_list_font_size"] isEqualToString:@"small"]) {
-            boldFontDescriptor = [boldFontDescriptor fontDescriptorWithSize:11.0f];
-        } else if ([[userPreferences stringForKey:@"feed_list_font_size"] isEqualToString:@"medium"]) {
-            boldFontDescriptor = [boldFontDescriptor fontDescriptorWithSize:12.0f];
-        } else if ([[userPreferences stringForKey:@"feed_list_font_size"] isEqualToString:@"large"]) {
-            boldFontDescriptor = [boldFontDescriptor fontDescriptorWithSize:14.0f];
-        } else if ([[userPreferences stringForKey:@"feed_list_font_size"] isEqualToString:@"xl"]) {
-            boldFontDescriptor = [boldFontDescriptor fontDescriptorWithSize:16.0f];
-        }
-    }
+    UIFontDescriptor *boldFontDescriptor = [self fontDescriptorUsingPreferredSize:UIFontTextStyleCaption1];
     UIFont *font = [UIFont fontWithDescriptor: boldFontDescriptor size:0.0];
     NSInteger titleOffsetY = ((rect.size.height - font.pointSize) / 2) - 1;
     NSString *folderTitle;
@@ -123,6 +111,8 @@
             folderTitle = [@"All Shared Stories" uppercaseString];
     } else if (section == 2) {
         folderTitle = [@"All Stories" uppercaseString];
+    } else if ([folderName isEqual:@"read_stories"]) {
+        folderTitle = [@"Read Stories" uppercaseString];
     } else if ([folderName isEqual:@"saved_stories"]) {
         folderTitle = [@"Saved Stories" uppercaseString];
     } else {
@@ -171,7 +161,7 @@
         disclosureButton.frame = CGRectMake(customView.frame.size.width - 32, 3, 29, 29);
 
         // Add collapse button to all folders except Everything
-        if (section != 0 && section != 2) {
+        if (section != 0 && section != 2 && ![folderName isEqual:@"read_stories"]) {
             if (!isFolderCollapsed) {
                 UIImage *disclosureImage = [UIImage imageNamed:@"disclosure_down.png"];
                 [disclosureButton setImage:disclosureImage forState:UIControlStateNormal];
@@ -193,6 +183,8 @@
     UIImage *folderImage;
     int folderImageViewX = 10;
     BOOL allowLongPress = NO;
+    int width = 20;
+    int height = 20;
     
     if (section == 0) {
         folderImage = [UIImage imageNamed:@"ak-icon-global.png"];
@@ -222,6 +214,13 @@
         } else {
             folderImageViewX = 7;
         }
+    } else if ([folderName isEqual:@"read_stories"]) {
+        folderImage = [UIImage imageNamed:@"g_icn_folder_read.png"];
+        if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+            folderImageViewX = 10;
+        } else {
+            folderImageViewX = 7;
+        }
     } else {
         if (isFolderCollapsed) {
             folderImage = [UIImage imageNamed:@"g_icn_folder_rss"];
@@ -234,7 +233,7 @@
         }
         allowLongPress = YES;
     }
-    [folderImage drawInRect:CGRectMake(folderImageViewX, 8, 20, 20)];
+    [folderImage drawInRect:CGRectMake(folderImageViewX, 8, width, height)];
     
     [customView setAutoresizingMask:UIViewAutoresizingNone];
     
@@ -251,6 +250,30 @@
         longpress.delegate = self;
         [self addGestureRecognizer:longpress];
     }
+}
+
+- (UIFontDescriptor *)fontDescriptorUsingPreferredSize:(NSString *)textStyle {
+    if (fontDescriptorSize) return fontDescriptorSize;
+
+    NSUserDefaults *userPreferences = [NSUserDefaults standardUserDefaults];
+    UIFontDescriptor *fontDescriptor = [UIFontDescriptor preferredFontDescriptorWithTextStyle: textStyle];
+    fontDescriptorSize = [fontDescriptor fontDescriptorWithSymbolicTraits: UIFontDescriptorTraitBold];
+
+    if (![userPreferences boolForKey:@"use_system_font_size"]) {
+        if ([[userPreferences stringForKey:@"feed_list_font_size"] isEqualToString:@"xs"]) {
+            fontDescriptorSize = [fontDescriptorSize fontDescriptorWithSize:10.0f];
+        } else if ([[userPreferences stringForKey:@"feed_list_font_size"] isEqualToString:@"small"]) {
+            fontDescriptorSize = [fontDescriptorSize fontDescriptorWithSize:11.0f];
+        } else if ([[userPreferences stringForKey:@"feed_list_font_size"] isEqualToString:@"medium"]) {
+            fontDescriptorSize = [fontDescriptorSize fontDescriptorWithSize:12.0f];
+        } else if ([[userPreferences stringForKey:@"feed_list_font_size"] isEqualToString:@"large"]) {
+            fontDescriptorSize = [fontDescriptorSize fontDescriptorWithSize:14.0f];
+        } else if ([[userPreferences stringForKey:@"feed_list_font_size"] isEqualToString:@"xl"]) {
+            fontDescriptorSize = [fontDescriptorSize fontDescriptorWithSize:16.0f];
+        }
+    }
+    
+    return fontDescriptorSize;
 }
 
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gestureRecognizer {

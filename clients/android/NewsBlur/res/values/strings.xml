@@ -21,6 +21,7 @@
     <string name="add_feed_message">Add \"%s\" to your feeds?</string>
     
     <string name="loading">Loading…</string>
+    <string name="orig_text_loading">Fetching text…</string>
     <string name="edit">Shared</string>
     
     <string name="follow_error">There was a problem following the user. Check your internet connection and try again.</string>
@@ -101,16 +102,17 @@
     <string name="menu_textsize">Adjust text size</string>
     <string name="menu_save_story">Save this story</string>
     <string name="menu_unsave_story">Unsave this story</string>
-    <string name="menu_mark_previous_stories_as_read">Mark previous as read</string>
+    <string name="menu_newest_mark_older_stories_as_read">\u21E3 Mark older as read</string>
+    <string name="menu_newest_mark_newer_stories_as_read">\u21E1 Mark newer as read</string>
+    <string name="menu_oldest_mark_older_stories_as_read">\u21E1 Mark older as read</string>
+    <string name="menu_oldest_mark_newer_stories_as_read">\u21E3 Mark newer as read</string>
     <string name="menu_mark_story_as_read">Mark as read</string>
     <string name="menu_mark_unread">Mark as unread</string>
     <string name="menu_fullscreen">Full screen</string>
 
     <string name="toast_error_loading_stories">Error loading stories</string>
     
-    <string name="toast_marked_folder_as_read">Folder marked as read</string>
-    <string name="toast_marked_feed_as_read">Feed marked as read</string>
-    <string name="toast_marked_socialfeed_as_read">Blurblog marked as read</string>
+    <string name="toast_marked_stories_as_read">Stories marked as read</string>
     
     <string name="toast_error_marking_feed_as_read">Error marking feed as read. Check your internet connection.</string>
 
@@ -136,13 +138,15 @@
     <string name="menu_search">Search</string>
     <string name="menu_mark_all_as_read">Mark all as read</string>
     <string name="menu_logout">Log out</string>
+    <string name="menu_feedback">Send app feedback</string>
+    <string name="menu_loginas">Login as...</string>
+
+    <string name="loginas_title">Login As User</string>
 
     <string name="empty_list_view_loading">Loading…</string>
     <string name="empty_list_view_no_stories">No stories to read</string>
     
     <string name="login_registration_register">Register</string>
-    <string name="login_google_reader">Google Reader</string>
-    <string name="login_add_sites_from_google_reader">Import your sites from Google Reader</string>
     <string name="add_sites">Add some sites</string>
     <string name="get_started">Let\'s get started</string>
     <string name="add_friends">Add your friends</string>
@@ -164,21 +168,40 @@
     <string name="error_liking_comment">Error favoriting comment</string>
     <string name="public_comment_count">%d PUBLIC COMMENTS</string>
     <string name="friends_comments_count">%d COMMENTS</string>
-    <string name="toast_marked_all_stories_as_read">All stories marked as read</string>
     <string name="unknown_user">Unknown User</string>
     <string name="delete_feed_message">Delete feed \&quot;%s\&quot;?</string>
     
-    <string name="oldest">Oldest</string>
-    <string name="newest">Newest First</string>
-    <string name="menu_story_order">Story Order</string>
-    
-    <string name="all_stories">All Stories</string>
-    <string name="unread_only">Unread Only</string>
-    <string name="menu_read_filter">Read Filter</string>
     <string name="menu_default_view">Default View</string>
     
     <string name="settings">Preferences</string>
+
+    <string name="settings_cat_offline">Offline</string>
+    <string name="settings_enable_offline">Download Stories</string>
+    <string name="settings_enable_offline_sum">Periodically fetch stories in background</string>
+    <string name="settings_enable_image_prefetch">Download Images</string>
+    <string name="settings_enable_image_prefetch_sum">Pre-fetch images for offline reading</string>
+    <string name="settings_keep_old_stories">Keep Stories after Reading</string>
+    <string name="settings_keep_old_stories_sum">Disable to reduce storage usage</string>
+
+    <string name="menu_network_select">Download Using</string>
+    <string name="menu_network_select_sum">Restrict background data to chosen networks</string>
+    <string name="menu_network_select_opt_any">Any Network</string>
+    <string name="menu_network_select_opt_nomo">Wifi and Ethernet Only</string>
+    <string-array name="default_network_select_entries">
+        <item>@string/menu_network_select_opt_any</item>
+        <item>@string/menu_network_select_opt_nomo</item>
+    </string-array>
+    <string-array name="default_network_select_values">
+        <item>ANY</item>
+        <item>NOMO</item>
+    </string-array>
+    <string name="default_network_select_value">NOMO</string>
+
     <string name="settings_cat_story_list">Story List</string>
+
+    <string name="oldest">Oldest</string>
+    <string name="newest">Newest First</string>
+    <string name="menu_story_order">Story Order</string>
     <string-array name="default_story_order_entries">
         <item>@string/newest</item>
         <item>@string/oldest</item>
@@ -188,6 +211,10 @@
         <item>OLDEST</item>
     </string-array>
     <string name="default_story_order_value">NEWEST</string>
+
+    <string name="all_stories">All Stories</string>
+    <string name="unread_only">Unread Only</string>
+    <string name="menu_read_filter">Read Filter</string>
     <string-array name="default_read_filter_entries">
         <item>@string/all_stories</item>
         <item>@string/unread_only</item>

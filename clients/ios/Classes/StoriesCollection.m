@@ -35,8 +35,10 @@
 @synthesize isSocialView;
 @synthesize isSocialRiverView;
 @synthesize isSavedView;
+@synthesize isReadView;
 @synthesize transferredFromDashboard;
-
+@synthesize inSearch;
+@synthesize searchQuery;
 
 - (id)init {
     if (self = [super init]) {
@@ -72,6 +74,7 @@
     self.isSocialView = NO;
     self.isSocialRiverView = NO;
     self.isSavedView = NO;
+    self.isReadView = NO;
 }
 
 - (void)transferStoriesFromCollection:(StoriesCollection *)fromCollection {
@@ -80,6 +83,8 @@
     [self setFeedUserProfiles:fromCollection.activeFeedUserProfiles];
     self.activeFolderFeeds = fromCollection.activeFolderFeeds;
     self.activeClassifiers = fromCollection.activeClassifiers;
+    self.inSearch = fromCollection.inSearch;
+    self.searchQuery = fromCollection.searchQuery;
     
 }
 
@@ -200,6 +205,7 @@
 
 - (NSInteger)indexFromLocation:(NSInteger)location {
     if (location == -1) return -1;
+    if (location >= [activeFeedStoryLocations count]) return -1;
     return [[activeFeedStoryLocations objectAtIndex:location] intValue];
 }
 
@@ -452,16 +458,8 @@
     
     // make the story as read in self.activeFeedStories
     NSString *newStoryIdStr = [NSString stringWithFormat:@"%@", [newStory valueForKey:@"story_hash"]];
-    NSMutableArray *newActiveFeedStories = [self.activeFeedStories mutableCopy];
-    for (int i = 0; i < [newActiveFeedStories count]; i++) {
-        NSMutableArray *thisStory = [[newActiveFeedStories objectAtIndex:i] mutableCopy];
-        NSString *thisStoryIdStr = [NSString stringWithFormat:@"%@", [thisStory valueForKey:@"story_hash"]];
-        if ([newStoryIdStr isEqualToString:thisStoryIdStr]) {
-            [newActiveFeedStories replaceObjectAtIndex:i withObject:newStory];
-            break;
-        }
-    }
-    self.activeFeedStories = newActiveFeedStories;
+    [self replaceStory:newStory withId:newStoryIdStr];
+    
     
     // If not a feed, then don't bother updating local feed
     if (!feed) return;
@@ -508,6 +506,19 @@
                                         forKey:[story objectForKey:@"story_hash"]];
     [appDelegate.unreadStoryHashes removeObjectForKey:[story objectForKey:@"story_hash"]];
     [appDelegate finishMarkAsRead:story];
+}
+
+- (void)replaceStory:(NSDictionary *)newStory withId:(NSString *)newStoryIdStr {
+    NSMutableArray *newActiveFeedStories = [self.activeFeedStories mutableCopy];
+    for (int i = 0; i < [newActiveFeedStories count]; i++) {
+        NSMutableArray *thisStory = [[newActiveFeedStories objectAtIndex:i] mutableCopy];
+        NSString *thisStoryIdStr = [NSString stringWithFormat:@"%@", [thisStory valueForKey:@"story_hash"]];
+        if ([newStoryIdStr isEqualToString:thisStoryIdStr]) {
+            [newActiveFeedStories replaceObjectAtIndex:i withObject:newStory];
+            break;
+        }
+    }
+    self.activeFeedStories = newActiveFeedStories;
 }
 
 - (void)markStoryUnread:(NSDictionary *)story {
@@ -559,16 +570,7 @@
     
     // make the story as read in self.activeFeedStories
     NSString *newStoryIdStr = [NSString stringWithFormat:@"%@", [newStory valueForKey:@"story_hash"]];
-    NSMutableArray *newActiveFeedStories = [self.activeFeedStories mutableCopy];
-    for (int i = 0; i < [newActiveFeedStories count]; i++) {
-        NSMutableArray *thisStory = [[newActiveFeedStories objectAtIndex:i] mutableCopy];
-        NSString *thisStoryIdStr = [NSString stringWithFormat:@"%@", [thisStory valueForKey:@"story_hash"]];
-        if ([newStoryIdStr isEqualToString:thisStoryIdStr]) {
-            [newActiveFeedStories replaceObjectAtIndex:i withObject:newStory];
-            break;
-        }
-    }
-    self.activeFeedStories = newActiveFeedStories;
+    [self replaceStory:newStory withId:newStoryIdStr];
 
     // If not a feed, then don't bother updating local feed.
     if (!feed) return;
@@ -622,24 +624,31 @@
     [self toggleStorySaved:appDelegate.activeStory];
 }
 
-- (void)toggleStorySaved:(NSDictionary *)story {
+- (BOOL)toggleStorySaved:(NSDictionary *)story {
     BOOL isSaved = [[story objectForKey:@"starred"] boolValue];
+    
     if (isSaved) {
-        [self markStory:story asSaved:NO];
+        story = [self markStory:story asSaved:NO];
         [self syncStoryAsUnsaved:story];
     } else {
-        [self markStory:story asSaved:YES];
+        story = [self markStory:story asSaved:YES];
         [self syncStoryAsSaved:story];
     }
+    
+    return !isSaved;
 }
 
-- (void)markStory:(NSDictionary *)story asSaved:(BOOL)saved {
-    NSMutableDictionary *newStory = [[appDelegate getStory:[story objectForKey:@"story_hash"]] mutableCopy];
+- (NSDictionary *)markStory:(NSDictionary *)story asSaved:(BOOL)saved {
+    BOOL firstSaved = NO;
+    NSMutableDictionary *newStory = [story mutableCopy];
     [newStory setValue:[NSNumber numberWithBool:saved] forKey:@"starred"];
-    if (saved) {
-        [newStory setValue:[Utilities formatLongDateFromTimestamp:nil] forKey:@"starred_date"];
-    } else {
+    if (saved && ![newStory objectForKey:@"starred_date"]) {
+        [newStory setObject:[Utilities formatLongDateFromTimestamp:nil] forKey:@"starred_date"];
+        appDelegate.savedStoriesCount += 1;
+        firstSaved = YES;
+    } else if (!saved) {
         [newStory removeObjectForKey:@"starred_date"];
+        appDelegate.savedStoriesCount -= 1;
     }
     
     if ([[newStory objectForKey:@"story_hash"]
@@ -647,24 +656,26 @@
         appDelegate.activeStory = newStory;
     }
     
-    // make the story as read in self.activeFeedStories
-    NSString *newStoryIdStr = [NSString stringWithFormat:@"%@", [newStory valueForKey:@"story_hash"]];
-    NSMutableArray *newActiveFeedStories = [self.activeFeedStories mutableCopy];
-    for (int i = 0; i < [newActiveFeedStories count]; i++) {
-        NSMutableArray *thisStory = [[newActiveFeedStories objectAtIndex:i] mutableCopy];
-        NSString *thisStoryIdStr = [NSString stringWithFormat:@"%@", [thisStory valueForKey:@"story_hash"]];
-        if ([newStoryIdStr isEqualToString:thisStoryIdStr]) {
-            [newActiveFeedStories replaceObjectAtIndex:i withObject:newStory];
-            break;
+    // Add folder tags if no user tags
+    if (![story objectForKey:@"user_tags"]) {
+        NSArray *parentFolders = [appDelegate parentFoldersForFeed:[story objectForKey:@"story_feed_id"]];
+        NSLog(@"Saving in folders: %@", parentFolders);
+        [newStory setObject:parentFolders forKey:@"user_tags"];
+    }
+
+    // Fake increased count on saved tags if saving for the first time,
+    // will be recounted when save request returns
+    if (firstSaved) {
+        for (NSString *userTag in [newStory objectForKey:@"user_tags"]) {
+            [appDelegate adjustSavedStoryCount:userTag direction:(saved ? 1 : -1)];
         }
     }
-    self.activeFeedStories = newActiveFeedStories;
+
+    // make the story as read in self.activeFeedStories
+    NSString *newStoryIdStr = [NSString stringWithFormat:@"%@", [newStory valueForKey:@"story_hash"]];
+    [self replaceStory:newStory withId:newStoryIdStr];
     
-    if (saved) {
-        appDelegate.savedStoriesCount += 1;
-    } else {
-        appDelegate.savedStoriesCount -= 1;
-    }
+    return newStory;
 }
 
 - (void)syncStoryAsSaved:(NSDictionary *)story {
@@ -673,12 +684,14 @@
     NSURL *url = [NSURL URLWithString:urlString];
     ASIFormDataRequest *request = [ASIFormDataRequest requestWithURL:url];
     
-    [request setPostValue:[story
-                           objectForKey:@"story_hash"]
+    [request setPostValue:[story objectForKey:@"story_hash"]
                    forKey:@"story_id"];
-    [request setPostValue:[story
-                           objectForKey:@"story_feed_id"]
+    [request setPostValue:[story objectForKey:@"story_feed_id"]
                    forKey:@"feed_id"];
+    for (NSString *userTag in [story objectForKey:@"user_tags"]) {
+        [request addPostValue:userTag
+                       forKey:@"user_tags"];
+    }
     
     [request setDidFinishSelector:@selector(finishMarkAsSaved:)];
     [request setDidFailSelector:@selector(requestFailed:)];
@@ -694,8 +707,24 @@
     if ([request responseStatusCode] != 200) {
         return [self failedMarkAsSaved:request];
     }
-
+    
+    [self updateSavedStoryCounts:request];
+    
     [appDelegate finishMarkAsSaved:request];
+}
+
+- (void)updateSavedStoryCounts:(ASIFormDataRequest *)request {
+    NSString *responseString = [request responseString];
+    NSData *responseData=[responseString dataUsingEncoding:NSUTF8StringEncoding];
+    NSError *error;
+    NSDictionary *results = [NSJSONSerialization
+                             JSONObjectWithData:responseData
+                             options:kNilOptions
+                             error:&error];
+    NSArray *savedStories = [appDelegate updateStarredStoryCounts:results];
+    NSMutableDictionary *allFolders = [appDelegate.dictFolders mutableCopy];
+    [allFolders setValue:savedStories forKey:@"saved_stories"];
+    appDelegate.dictFolders = allFolders;
 }
 
 - (void)failedMarkAsSaved:(ASIFormDataRequest *)request {
@@ -732,6 +761,7 @@
         return [self failedMarkAsUnsaved:request];
     }
     
+    [self updateSavedStoryCounts:request];
     [appDelegate finishMarkAsUnsaved:request];
 }
 

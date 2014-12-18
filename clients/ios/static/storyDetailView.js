@@ -12,8 +12,13 @@ var loadImages = function() {
 
 var fitVideos = function() {
        $(".NB-story").fitVids({
-            customSelector: "iframe[src*='youtu.be'],iframe[src*='www.flickr.com'],iframe[src*='view.vzaar.com']"
+            customSelector: "iframe[src*='youtu.be'],iframe[src*='flickr.com'],iframe[src*='vimeo.com']"
        });
+};
+
+var linkAt = function(x, y, attribute) {
+    var el = document.elementFromPoint(x, y);
+    return el && el[attribute];
 };
 
 $('a.NB-show-profile').live('click', function () {
@@ -32,6 +37,22 @@ $('.NB-train-button a').live('click', function () {
     return false;
 });
 
+$('.NB-user-tag').live('click', function () {
+    var offset = $(this).offset();
+    console.log(['Offset', offset]);
+    var url = $(this).attr('href') + "/" + offset.left + "/" + (offset.top - window.pageYOffset) + "/" + offset.width + "/" + offset.height;
+    window.location = url;
+    return false;
+});
+
+$('.NB-save-button').live('click', function () {
+    var offset = $('a', this).offset();
+    console.log(['Offset', offset]);
+    var url = $('a', this).attr('href') + "/" + offset.left + "/" + (offset.top - window.pageYOffset) + "/" + offset.width + "/" + offset.height;
+    window.location = url;
+    return false;
+});
+
 $('.NB-button').live('touchstart', function () {
     $(this).addClass('active');
 });
@@ -44,10 +65,10 @@ function setImage(img) {
     var $img = $(img);
     var width = $(img).width();
     var height = $(img).height();
-
+//    console.log("img load", img.src, width, height);
     if ($img.attr('src').indexOf('feedburner') != - 1) {
         $img.attr('class', 'NB-feedburner');
-    } else if (width > 300 && height > 50) {
+    } else if (width >= (320-24) && height >= 50) {
         $img.attr('class', 'NB-large-image');
         if ($img.parent().attr('href')) {
             $img.parent().addClass('NB-contains-image')
@@ -175,8 +196,12 @@ function attachFastClick() {
                                                    });
     var tags = document.getElementsByClassName("NB-story-tag");
     Array.prototype.slice.call(tags, 0).forEach(function(tag) {
-        new NoClickDelay(tag);
-    });
+                                                new NoClickDelay(tag);
+                                                });
+    var userTags = document.getElementsByClassName("NB-user-tag");
+    Array.prototype.slice.call(userTags, 0).forEach(function(tag) {
+                                                new NoClickDelay(tag);
+                                                });
     
     var author = document.getElementById("NB-story-author");
     if (author) {

@@ -16,15 +16,13 @@ public class MixedFeedsReadingAdapter extends ReadingAdapter {
 
 	private final ContentResolver resolver; 
 
-	public MixedFeedsReadingAdapter(final FragmentManager fragmentManager, final ContentResolver resolver, DefaultFeedView defaultFeedView) {
-		super(fragmentManager, defaultFeedView);
+	public MixedFeedsReadingAdapter(final FragmentManager fragmentManager, final ContentResolver resolver, DefaultFeedView defaultFeedView, String sourceUserId) {
+		super(fragmentManager, defaultFeedView, sourceUserId);
 		this.resolver = resolver;
 	}
 
 	@Override
-	protected synchronized Fragment getReadingItemFragment(int position) {
-        stories.moveToPosition(position);
-        Story story = Story.fromCursor(stories);
+	protected synchronized ReadingItemFragment getReadingItemFragment(Story story) {
         String feedTitle = stories.getString(stories.getColumnIndex(DatabaseConstants.FEED_TITLE));
         String feedFaviconColor = stories.getString(stories.getColumnIndex(DatabaseConstants.FEED_FAVICON_COLOR));
         String feedFaviconFade = stories.getString(stories.getColumnIndex(DatabaseConstants.FEED_FAVICON_FADE));
@@ -36,7 +34,7 @@ public class MixedFeedsReadingAdapter extends ReadingAdapter {
         Cursor feedClassifierCursor = resolver.query(classifierUri, null, null, null, null);
         Classifier classifier = Classifier.fromCursor(feedClassifierCursor);
         
-        return ReadingItemFragment.newInstance(story, feedTitle, feedFaviconColor, feedFaviconFade, feedFaviconBorder, feedFaviconText, feedFaviconUrl, classifier, true, defaultFeedView);
+        return ReadingItemFragment.newInstance(story, feedTitle, feedFaviconColor, feedFaviconFade, feedFaviconBorder, feedFaviconText, feedFaviconUrl, classifier, true, defaultFeedView, sourceUserId);
 	}
 	
 }

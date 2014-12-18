@@ -106,6 +106,7 @@ def feed_autocomplete(request):
     
     feeds = list(set([Feed.get_by_id(feed_id) for feed_id in feed_ids]))
     feeds = [feed for feed in feeds if feed and not feed.branch_from_feed]
+    feeds = [feed for feed in feeds if 'facebook.com/feeds/notifications.php' not in feed.feed_address]
     if format == 'autocomplete':
         feeds = [{
             'id': feed.pk,
@@ -447,15 +448,20 @@ def status(request):
 def original_text(request):
     story_id = request.REQUEST.get('story_id')
     feed_id = request.REQUEST.get('feed_id')
+    story_hash = request.REQUEST.get('story_hash', None)
     force = request.REQUEST.get('force', False)
+    debug = request.REQUEST.get('debug', False)
 
-    story, _ = MStory.find_story(story_id=story_id, story_feed_id=feed_id)
+    if story_hash:
+        story, _ = MStory.find_story(story_hash=story_hash)
+    else:
+        story, _ = MStory.find_story(story_id=story_id, story_feed_id=feed_id)
 
     if not story:
         logging.user(request, "~FYFetching ~FGoriginal~FY story text: ~FRstory not found")
         return {'code': -1, 'message': 'Story not found.', 'original_text': None, 'failed': True}
     
-    original_text = story.fetch_original_text(force=force, request=request)
+    original_text = story.fetch_original_text(force=force, request=request, debug=debug)
 
     return {
         'feed_id': feed_id,
@@ -463,3 +469,19 @@ def original_text(request):
         'original_text': original_text,
         'failed': not original_text or len(original_text) < 100,
     }
+
+@required_params('story_hash')
+def original_story(request):
+    story_hash = request.REQUEST.get('story_hash')
+    force = request.REQUEST.get('force', False)
+    debug = request.REQUEST.get('debug', False)
+
+    story, _ = MStory.find_story(story_hash=story_hash)
+
+    if not story:
+        logging.user(request, "~FYFetching ~FGoriginal~FY story page: ~FRstory not found")
+        return {'code': -1, 'message': 'Story not found.', 'original_page': None, 'failed': True}
+    
+    original_page = story.fetch_original_page(force=force, request=request, debug=debug)
+
+    return HttpResponse(original_page or "")

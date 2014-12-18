@@ -1,6 +1,8 @@
 package com.newsblur.activity;
 
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Set;
 
 import android.content.Intent;
 import android.database.Cursor;
@@ -14,58 +16,46 @@ import android.util.Log;
 
 import com.newsblur.R;
 import com.newsblur.database.DatabaseConstants;
-import com.newsblur.database.FeedProvider;
 import com.newsblur.fragment.FolderItemListFragment;
 import com.newsblur.fragment.MarkAllReadDialogFragment;
 import com.newsblur.fragment.MarkAllReadDialogFragment.MarkAllReadDialogListener;
-import com.newsblur.network.APIManager;
-import com.newsblur.network.MarkFolderAsReadTask;
 import com.newsblur.util.AppConstants;
 import com.newsblur.util.DefaultFeedView;
+import com.newsblur.util.FeedSet;
 import com.newsblur.util.FeedUtils;
 import com.newsblur.util.PrefsUtils;
 import com.newsblur.util.ReadFilter;
+import com.newsblur.util.StateFilter;
 import com.newsblur.util.StoryOrder;
 
 public class FolderItemsList extends ItemsList implements MarkAllReadDialogListener {
 
 	public static final String EXTRA_FOLDER_NAME = "folderName";
 	private String folderName;
-	private ArrayList<String> feedIds;
-	private APIManager apiManager;
 
 	@Override
 	protected void onCreate(Bundle bundle) {
-		super.onCreate(bundle);
 		folderName = getIntent().getStringExtra(EXTRA_FOLDER_NAME);
+
+        // note: onCreate triggers createFeedSet() so it has to wait until we have the folder name
+		super.onCreate(bundle);
 
 		setTitle(folderName);
 
-        if (bundle != null) {
-            feedIds = bundle.getStringArrayList(BUNDLE_FEED_IDS);
-        }
-
-        if (feedIds == null) {
-            feedIds = new ArrayList<String>();
-            final Uri feedsUri = FeedProvider.FEED_FOLDER_MAP_URI.buildUpon().appendPath(folderName).build();
-            Cursor cursor = getContentResolver().query(feedsUri, new String[] { DatabaseConstants.FEED_ID }, DatabaseConstants.getStorySelectionFromState(currentState), null, null);
-            while (cursor.moveToNext() && (feedIds.size() <= AppConstants.MAX_FEED_LIST_SIZE)) {
-                feedIds.add(cursor.getString(cursor.getColumnIndex(DatabaseConstants.FEED_ID)));
-            }
-            cursor.close();
-        }
-
-		apiManager = new APIManager(this);
-
 		itemListFragment = (FolderItemListFragment) fragmentManager.findFragmentByTag(FolderItemListFragment.class.getName());
 		if (itemListFragment == null) {
-			itemListFragment = FolderItemListFragment.newInstance(feedIds, folderName, currentState, getStoryOrder(), getDefaultFeedView());
+			itemListFragment = FolderItemListFragment.newInstance(folderName, currentState, getDefaultFeedView());
 			itemListFragment.setRetainInstance(true);
 			FragmentTransaction listTransaction = fragmentManager.beginTransaction();
 			listTransaction.add(R.id.activity_itemlist_container, itemListFragment, FolderItemListFragment.class.getName());
 			listTransaction.commit();
 		}
 	}
+
+    @Override
+    protected FeedSet createFeedSet() {
+        return FeedSet.folder(this.folderName, dbHelper.getFeedsForFolder(folderName));
+    }
 
 	@Override
 	public boolean onCreateOptionsMenu(Menu menu) {
@@ -75,21 +65,15 @@ public class FolderItemsList extends ItemsList implements MarkAllReadDialogListe
 	}
 
 	@Override
-	public void triggerRefresh(int page) {
-		if (!stopLoading) {
-			setProgressBarIndeterminateVisibility(true);
-
-			String[] feeds = new String[feedIds.size()];
-			feedIds.toArray(feeds);
-            FeedUtils.updateFeeds(this, this, feeds, page, getStoryOrder(), PrefsUtils.getReadFilterForFolder(this, folderName));
-		}
-	}
-
-	@Override
 	public void markItemListAsRead() {
 	    MarkAllReadDialogFragment dialog = MarkAllReadDialogFragment.newInstance(folderName);
 	    dialog.show(fragmentManager, "dialog");
 	}
+
+    @Override
+    public void onMarkAllRead() {
+        super.markItemListAsRead();
+    }
 
     @Override
     protected StoryOrder getStoryOrder() {
@@ -125,31 +109,8 @@ public class FolderItemsList extends ItemsList implements MarkAllReadDialogListe
     }
 
     @Override
-    public void onMarkAllRead() {
-        new MarkFolderAsReadTask(apiManager, getContentResolver()) {
-            @Override
-            protected void onPostExecute(Boolean result) {
-                if (result) {
-                    setResult(RESULT_OK);
-                    Toast.makeText(FolderItemsList.this, R.string.toast_marked_folder_as_read, Toast.LENGTH_SHORT).show();
-                    finish();
-                } else {
-                    Toast.makeText(FolderItemsList.this, R.string.toast_error_marking_feed_as_read, Toast.LENGTH_SHORT).show();
-                }
-            }
-        }.execute(folderName);
-    }
-
-    @Override
     public void onCancel() {
         // do nothing
     }
 
-    @Override
-    protected void onSaveInstanceState(Bundle bundle) {
-        if (this.feedIds != null) {
-            bundle.putStringArrayList(BUNDLE_FEED_IDS, this.feedIds);
-        }
-        super.onSaveInstanceState(bundle);
-    }
 }

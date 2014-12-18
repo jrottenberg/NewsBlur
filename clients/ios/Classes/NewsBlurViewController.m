@@ -13,6 +13,7 @@
 #import "InteractionsModule.h"
 #import "ActivityModule.h"
 #import "FeedTableCell.h"
+#import "DashboardViewController.h"
 #import "FeedsMenuViewController.h"
 #import "FeedDetailMenuViewController.h"
 #import "FeedDetailViewController.h"
@@ -26,7 +27,6 @@
 #import "JSON.h"
 #import "NBNotifier.h"
 #import "Utilities.h"
-#import "UIBarButtonItem+WEPopover.h"
 #import "UIBarButtonItem+Image.h"
 #import "AddSiteViewController.h"
 #import "FMDatabase.h"
@@ -100,7 +100,7 @@ static UIFont *userLabelFont;
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    popoverClass = [WEPopoverController class];
+    popoverClass = [WYPopoverController class];
 
     pull = [[PullToRefreshView alloc] initWithScrollView:self.feedTitlesTable];
     [pull setDelegate:self];
@@ -170,13 +170,14 @@ static UIFont *userLabelFont;
 }
 
 - (void)viewWillAppear:(BOOL)animated {
+//    NSTimeInterval start = [NSDate timeIntervalSinceReferenceDate];
+
     if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad &&
         !self.interactiveFeedDetailTransition) {
         
         [appDelegate.masterContainerViewController transitionFromFeedDetail];
     }
-//    NSDate *start = [NSDate date];
-//    NSLog(@"Feed List timing 0: %f", (double)[start timeIntervalSinceNow] * -1000.0);
+//    NSLog(@"Feed List timing 0: %f", [NSDate timeIntervalSinceReferenceDate] - start);
     [super viewWillAppear:animated];
     
     NSUserDefaults *userPreferences = [NSUserDefaults standardUserDefaults];
@@ -211,7 +212,7 @@ static UIFont *userLabelFont;
         [self.notifier setNeedsLayout];
     }
     
-//    NSLog(@"Feed List timing 2: %f", (double)[start timeIntervalSinceNow] * -1000.0);
+//    NSLog(@"Feed List timing 2: %f", [NSDate timeIntervalSinceReferenceDate] - start);
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -223,11 +224,6 @@ static UIFont *userLabelFont;
     [self performSelector:@selector(fadeSelectedCell) withObject:self afterDelay:0.2];
 //    self.navigationController.navigationBar.backItem.title = @"All Sites";
     
-//    // reset all feed detail specific data
-//    appDelegate.activeFeed = nil;
-//    appDelegate.isSocialView = NO;
-//    appDelegate.isRiverView = NO;
-    appDelegate.inFindingStoryMode = NO;
     self.interactiveFeedDetailTransition = NO;
 }
 
@@ -263,16 +259,37 @@ static UIFont *userLabelFont;
 }
 
 - (void)fadeSelectedCell {
-    [self.feedTitlesTable deselectRowAtIndexPath:[self.feedTitlesTable indexPathForSelectedRow]
+    NSIndexPath *indexPath = [self.feedTitlesTable indexPathForSelectedRow];
+    if (!indexPath) return;
+    [self.feedTitlesTable deselectRowAtIndexPath:indexPath
                                         animated:YES];
+
+    NSString *folderName = [appDelegate.dictFoldersArray objectAtIndex:indexPath.section];
+    id feedId = [[appDelegate.dictFolders objectForKey:folderName] objectAtIndex:indexPath.row];
+    NSString *feedIdStr = [NSString stringWithFormat:@"%@", feedId];
+
     NSUserDefaults *preferences = [NSUserDefaults standardUserDefaults];
-    if (![preferences boolForKey:@"show_feeds_after_being_read"]) {
-        NSIndexPath *indexPath = [self.feedTitlesTable indexPathForSelectedRow];
-        if (!indexPath) return;
+//    NSLog(@"Show feeds after being read (%@): %d / %@ -> %@", feedIdStr, [preferences boolForKey:@"show_feeds_after_being_read"], [self.stillVisibleFeeds objectForKey:feedIdStr], self.stillVisibleFeeds);
+    NSIndexPath *visiblePath = [self.stillVisibleFeeds objectForKey:feedIdStr];
+    if (visiblePath) {
         [self.feedTitlesTable beginUpdates];
-        [self.feedTitlesTable reloadRowsAtIndexPaths:@[indexPath]
+        NSMutableArray *paths = (indexPath.section == visiblePath.section &&
+                                 indexPath.row == visiblePath.row)
+        ? @[indexPath].mutableCopy
+        : @[indexPath, visiblePath].mutableCopy;
+        if (![preferences boolForKey:@"show_feeds_after_being_read"]) {
+            [self.stillVisibleFeeds removeObjectForKey:feedIdStr];
+            for (NSString *feedId in [self.stillVisibleFeeds allKeys]) {
+                NSLog(@"Found inadvertantly still visible feed: %@", feedId);
+                [paths addObject:[self.stillVisibleFeeds objectForKey:feedId]];
+            }
+        }
+        [self.feedTitlesTable reloadRowsAtIndexPaths:paths
                                     withRowAnimation:UITableViewRowAnimationFade];
         [self.feedTitlesTable endUpdates];
+        if (![preferences boolForKey:@"show_feeds_after_being_read"]) {
+            [self.stillVisibleFeeds removeAllObjects];
+        }
     }
 }
 
@@ -315,12 +332,6 @@ static UIFont *userLabelFont;
 
 - (void)didRotateFromInterfaceOrientation:(UIInterfaceOrientation)fromInterfaceOrientation {
     [self.feedTitlesTable reloadData];
-}
-
-- (void)viewDidUnload {
-    [self setToolbarLeftMargin:nil];
-    [self setNoFocusMessage:nil];
-    [self setInnerView:nil];
 }
 
 - (void)layoutForInterfaceOrientation:(UIInterfaceOrientation)interfaceOrientation {
@@ -554,7 +565,6 @@ static UIFont *userLabelFont;
     NSArray *socialFeedsArray = [results objectForKey:@"social_feeds"];
     NSMutableArray *socialFolder = [[NSMutableArray alloc] init];
     NSMutableDictionary *socialDict = [[NSMutableDictionary alloc] init];
-    NSMutableDictionary *savedStoryDict = [[NSMutableDictionary alloc] init];
     NSMutableDictionary *tempActiveFeeds = [[NSMutableDictionary alloc] init];
     appDelegate.dictActiveFeeds = tempActiveFeeds;
     
@@ -578,28 +588,9 @@ static UIFont *userLabelFont;
     [allFolders setValue:socialFolder forKey:@"river_blurblogs"];
     [allFolders setValue:[[NSMutableArray alloc] init] forKey:@"river_global"];
     
-    appDelegate.savedStoriesCount = [[results objectForKey:@"starred_count"] intValue];
-    if (appDelegate.savedStoriesCount) {
-        NSMutableArray *savedStories = [NSMutableArray array];
-        for (NSDictionary *userTag in [results objectForKey:@"starred_counts"]) {
-            if ([[userTag objectForKey:@"tag"] isKindOfClass:[NSNull class]] ||
-                [[userTag objectForKey:@"tag"] isEqualToString:@""]) continue;
-            NSString *savedTagId = [NSString stringWithFormat:@"saved:%@", [userTag objectForKey:@"tag"]];
-            NSDictionary *savedTag = @{@"ps": [userTag objectForKey:@"count"],
-                                       @"feed_title": [userTag objectForKey:@"tag"],
-                                       @"id": [userTag objectForKey:@"tag"],
-                                       @"tag": [userTag objectForKey:@"tag"]};
-            [savedStories addObject:savedTagId];
-            [savedStoryDict setObject:savedTag forKey:savedTagId];
-            [appDelegate.dictUnreadCounts setObject:@{@"ps": [userTag objectForKey:@"count"],
-                                                      @"nt": [NSNumber numberWithInt:0],
-                                                      @"ng": [NSNumber numberWithInt:0]}
-                                             forKey:savedTagId];
-        }
-        [allFolders setValue:savedStories forKey:@"saved_stories"];
-        appDelegate.dictSavedStoryTags = savedStoryDict;
-    }
-    
+    NSArray *savedStories = [appDelegate updateStarredStoryCounts:results];
+    [allFolders setValue:savedStories forKey:@"saved_stories"];
+
     appDelegate.dictFolders = allFolders;
     
     // set up dictFeeds
@@ -658,9 +649,13 @@ static UIFont *userLabelFont;
         [appDelegate.dictFoldersArray insertObject:@"everything" atIndex:2];
     }
     
+    // Add Read Stories folder
+    [appDelegate.dictFoldersArray removeObject:@"read_stories"];
+    [appDelegate.dictFoldersArray insertObject:@"read_stories" atIndex:appDelegate.dictFoldersArray.count];
+
     // Add Saved Stories folder
+    [appDelegate.dictFoldersArray removeObject:@"saved_stories"];
     if (appDelegate.savedStoriesCount) {
-        [appDelegate.dictFoldersArray removeObject:@"saved_stories"];
         [appDelegate.dictFoldersArray insertObject:@"saved_stories" atIndex:appDelegate.dictFoldersArray.count];
     }
     
@@ -740,7 +735,7 @@ static UIFont *userLabelFont;
 - (void)loadOfflineFeeds:(BOOL)failed {
     __block __typeof__(self) _self = self;
     self.isOffline = YES;
-    NSLog(@"loadOfflineFeeds: %d", failed);
+//    NSLog(@"loadOfflineFeeds: %d", failed);
     NSUserDefaults *userPreferences = [NSUserDefaults standardUserDefaults];
     if (!appDelegate.activeUsername) {
         appDelegate.activeUsername = [userPreferences stringForKey:@"active_username"];
@@ -796,7 +791,7 @@ static UIFont *userLabelFont;
         [appDelegate.masterContainerViewController showSitePopover:self.addBarButton];
     } else {
         if (self.popoverController == nil) {
-            self.popoverController = [[WEPopoverController alloc]
+            self.popoverController = [[WYPopoverController alloc]
                                       initWithContentViewController:appDelegate.addSiteViewController];
             
             self.popoverController.delegate = self;
@@ -805,9 +800,6 @@ static UIFont *userLabelFont;
             self.popoverController = nil;
         }
         
-        if ([self.popoverController respondsToSelector:@selector(setContainerViewProperties:)]) {
-            [self.popoverController setContainerViewProperties:[self improvedContainerViewProperties]];
-        }
         [self.popoverController setPopoverContentSize:CGSizeMake(self.view.frame.size.width - 36,
                                                                  self.view.frame.size.height - 28)];
         [self.popoverController presentPopoverFromBarButtonItem:self.addBarButton
@@ -823,7 +815,7 @@ static UIFont *userLabelFont;
         [appDelegate.masterContainerViewController showFeedMenuPopover:self.settingsBarButton];
     } else {
         if (self.popoverController == nil) {
-            self.popoverController = [[WEPopoverController alloc]
+            self.popoverController = [[WYPopoverController alloc]
                                       initWithContentViewController:appDelegate.feedsMenuViewController];
             
             self.popoverController.delegate = self;
@@ -832,9 +824,6 @@ static UIFont *userLabelFont;
             self.popoverController = nil;
         }
         
-        if ([self.popoverController respondsToSelector:@selector(setContainerViewProperties:)]) {
-            [self.popoverController setContainerViewProperties:[self improvedContainerViewProperties]];
-        }
         [appDelegate.feedsMenuViewController view]; // Force viewDidLoad
         [self.popoverController setPopoverContentSize:CGSizeMake(200, 38 * [appDelegate.feedsMenuViewController.menuOptions count])];
         [self.popoverController presentPopoverFromBarButtonItem:self.settingsBarButton
@@ -845,7 +834,7 @@ static UIFont *userLabelFont;
 
 - (IBAction)showInteractionsPopover:(id)sender {    
     if (self.popoverController == nil) {
-        self.popoverController = [[WEPopoverController alloc]
+        self.popoverController = [[WYPopoverController alloc]
                                   initWithContentViewController:appDelegate.dashboardViewController];
         
         self.popoverController.delegate = self;
@@ -854,9 +843,6 @@ static UIFont *userLabelFont;
         self.popoverController = nil;
     }
     
-    if ([self.popoverController respondsToSelector:@selector(setContainerViewProperties:)]) {
-        [self.popoverController setContainerViewProperties:[self improvedContainerViewProperties]];
-    }
     [self.popoverController setPopoverContentSize:CGSizeMake(self.view.frame.size.width - 36,
                                                              self.view.frame.size.height - 60)];
     [self.popoverController presentPopoverFromBarButtonItem:self.activitiesButton
@@ -918,9 +904,9 @@ static UIFont *userLabelFont;
     } else if ([longPressTitle isEqualToString:@"mark_read_immediate"]) {
         [self markFeedRead:feedId cutoffDays:0];
         
-        if ([preferences boolForKey:@"show_feeds_after_being_read"]) {
+//        if ([preferences boolForKey:@"show_feeds_after_being_read"]) {
             [self.stillVisibleFeeds setObject:indexPath forKey:feedIdStr];
-        }
+//        }
         [self.feedTitlesTable beginUpdates];
         [self.feedTitlesTable reloadRowsAtIndexPaths:@[indexPath]
                                     withRowAnimation:UITableViewRowAnimationFade];
@@ -935,6 +921,7 @@ static UIFont *userLabelFont;
 - (void)unhighlightCell:(FeedTableCell *)cell {
     [cell setHighlighted:NO];
     NSUserDefaults *preferences = [NSUserDefaults standardUserDefaults];
+    NSLog(@"unhighlight cell");
     if (![preferences boolForKey:@"show_feeds_after_being_read"]) {
         NSIndexPath *indexPath = [self.feedTitlesTable indexPathForCell:cell];
         [self.feedTitlesTable beginUpdates];
@@ -982,9 +969,18 @@ static UIFont *userLabelFont;
     } else {
         [appDelegate.navigationController dismissViewControllerAnimated:YES completion:nil];
     }
+    
+    [self resizeFontSize];
+}
+
+- (void)resizeFontSize {
+    appDelegate.fontDescriptorTitleSize = nil;
     [self.feedTitlesTable reloadData];
+    
+    appDelegate.feedDetailViewController.invalidateFontCache = YES;
+    [appDelegate.feedDetailViewController reloadData];
     if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
-        [appDelegate.dashboardViewController.storiesModule.storyTitlesTable reloadData];
+        [appDelegate.dashboardViewController.storiesModule reloadData];
     }
 }
 
@@ -1002,10 +998,7 @@ static UIFont *userLabelFont;
          [NSSet setWithObjects:@"feed_list_font_size",
           nil] animated:YES];
     } else if ([notification.object isEqual:@"feed_list_font_size"]) {
-        [self.feedTitlesTable reloadData];
-        if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
-            [appDelegate.dashboardViewController.storiesModule.storyTitlesTable reloadData];
-        }
+        [self resizeFontSize];
     } else if ([notification.object isEqual:@"story_list_preview_images"]) {
         if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
             [appDelegate.dashboardViewController.storiesModule reloadData];
@@ -1068,9 +1061,7 @@ static UIFont *userLabelFont;
     NSString *feedIdStr = [NSString stringWithFormat:@"%@",feedId];
     BOOL isSocial = [appDelegate isSocialFeed:feedIdStr];
     BOOL isSaved = [appDelegate isSavedFeed:feedIdStr];
-    NSUserDefaults *userPreferences = [NSUserDefaults standardUserDefaults];
-    NSString *collapseKey = [NSString stringWithFormat:@"folderCollapsed:%@", folderName];
-    bool isFolderCollapsed = [userPreferences boolForKey:collapseKey];
+    BOOL isFolderCollapsed = [appDelegate isFolderCollapsed:folderName];
     
     NSString *CellIdentifier;
     if (isFolderCollapsed || ![self isFeedVisible:feedIdStr]) {
@@ -1121,6 +1112,10 @@ static UIFont *userLabelFont;
     if (appDelegate.hasNoSites) {
         return;
     }
+    
+    if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+        [appDelegate.dashboardViewController.storiesModule.view endEditing:YES];
+    }
 
     [appDelegate.storiesCollection reset];
     
@@ -1132,7 +1127,7 @@ static UIFont *userLabelFont;
     if (indexPath.section == 0) {
         folderName = @"river_global";
     } else if (indexPath.section == 1) {
-            folderName = @"river_blurblogs";
+        folderName = @"river_blurblogs";
     } else if (indexPath.section == 2) {
         folderName = @"everything";
     } else {
@@ -1141,6 +1136,7 @@ static UIFont *userLabelFont;
     id feedId = [[appDelegate.dictFolders objectForKey:folderName] objectAtIndex:indexPath.row];
     NSString *feedIdStr = [NSString stringWithFormat:@"%@",feedId];
     NSDictionary *feed;
+    appDelegate.storiesCollection.isReadView = NO;
     if ([appDelegate isSocialFeed:feedIdStr]) {
         feed = [appDelegate.dictSocialFeeds objectForKey:feedIdStr];
         appDelegate.storiesCollection.isSocialView = YES;
@@ -1157,9 +1153,9 @@ static UIFont *userLabelFont;
     }
 
     // If all feeds are already showing, no need to remember this one.
-    NSUserDefaults *preferences = [NSUserDefaults standardUserDefaults];
-    if (!self.viewShowingAllFeeds &&
-        [preferences boolForKey:@"show_feeds_after_being_read"]) {
+//    NSUserDefaults *preferences = [NSUserDefaults standardUserDefaults];
+    if (!self.viewShowingAllFeeds) {
+//        [preferences boolForKey:@"show_feeds_after_being_read"]) {
         [self.stillVisibleFeeds setObject:indexPath forKey:feedIdStr];
     }
     
@@ -1190,10 +1186,8 @@ static UIFont *userLabelFont;
     } else {
         folderName = [appDelegate.dictFoldersArray objectAtIndex:indexPath.section];
     }
-    NSUserDefaults *userPreferences = [NSUserDefaults standardUserDefaults];
-    NSString *collapseKey = [NSString stringWithFormat:@"folderCollapsed:%@", folderName];
-    bool isFolderCollapsed = [userPreferences boolForKey:collapseKey];
-    
+
+    bool isFolderCollapsed = [appDelegate isFolderCollapsed:folderName];
     if (isFolderCollapsed) {
         return 0;
     }
@@ -1250,7 +1244,9 @@ heightForHeaderInSection:(NSInteger)section {
     NSString *folderName = [appDelegate.dictFoldersArray objectAtIndex:section];
     
     BOOL visibleFeeds = [[self.visibleFolders objectForKey:folderName] boolValue];
-    if (!visibleFeeds && section != 2 && section != 0 && ![folderName isEqual:@"saved_stories"]) {
+    if (!visibleFeeds && section != 2 && section != 0 &&
+        ![folderName isEqualToString:@"saved_stories"] &&
+        ![folderName isEqualToString:@"read_stories"]) {
         return 0;
     }
     
@@ -1273,6 +1269,10 @@ heightForHeaderInSection:(NSInteger)section {
         tag = [NSString stringWithFormat:@"%ld", (long)button.tag];
     }
     
+    if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+        [appDelegate.dashboardViewController.storiesModule.view endEditing:YES];
+    }
+
     [appDelegate loadRiverFeedDetailView:appDelegate.feedDetailViewController withFolder:tag];
 }
 
@@ -1414,6 +1414,7 @@ heightForHeaderInSection:(NSInteger)section {
         [userPreferences setBool:YES forKey:collapseKey];
     }
     [userPreferences synchronize];
+    appDelegate.collapsedFolders = nil;
     
     [self.feedTitlesTable beginUpdates];
     [self.feedTitlesTable reloadSections:[NSIndexSet indexSetWithIndex:button.tag]
@@ -1825,55 +1826,16 @@ heightForHeaderInSection:(NSInteger)section {
 }
 
 #pragma mark -
-#pragma mark WEPopoverControllerDelegate implementation
+#pragma mark WYPopoverControllerDelegate implementation
 
-- (void)popoverControllerDidDismissPopover:(WEPopoverController *)thePopoverController {
+- (void)popoverControllerDidDismissPopover:(WYPopoverController *)thePopoverController {
 	//Safe to release the popover here
 	self.popoverController = nil;
 }
 
-- (BOOL)popoverControllerShouldDismissPopover:(WEPopoverController *)thePopoverController {
+- (BOOL)popoverControllerShouldDismissPopover:(WYPopoverController *)thePopoverController {
 	//The popover is automatically dismissed if you click outside it, unless you return NO here
 	return YES;
-}
-
-
-/**
- Thanks to Paul Solt for supplying these background images and container view properties
- */
-- (WEPopoverContainerViewProperties *)improvedContainerViewProperties {
-	
-	WEPopoverContainerViewProperties *props = [WEPopoverContainerViewProperties alloc];
-	NSString *bgImageName = nil;
-	CGFloat bgMargin = 0.0;
-	CGFloat bgCapSize = 0.0;
-	CGFloat contentMargin = 5.0;
-	
-	bgImageName = @"popoverBg.png";
-	
-	// These constants are determined by the popoverBg.png image file and are image dependent
-	bgMargin = 13; // margin width of 13 pixels on all sides popoverBg.png (62 pixels wide - 36 pixel background) / 2 == 26 / 2 == 13 
-	bgCapSize = 31; // ImageSize/2  == 62 / 2 == 31 pixels
-	
-	props.leftBgMargin = bgMargin;
-	props.rightBgMargin = bgMargin;
-	props.topBgMargin = bgMargin;
-	props.bottomBgMargin = bgMargin;
-	props.leftBgCapSize = bgCapSize;
-	props.topBgCapSize = bgCapSize;
-	props.bgImageName = bgImageName;
-	props.leftContentMargin = contentMargin;
-	props.rightContentMargin = contentMargin - 1; // Need to shift one pixel for border to look correct
-	props.topContentMargin = contentMargin; 
-	props.bottomContentMargin = contentMargin;
-	
-	props.arrowMargin = 4.0;
-	
-	props.upArrowImageName = @"popoverArrowUp.png";
-	props.downArrowImageName = @"popoverArrowDown.png";
-	props.leftArrowImageName = @"popoverArrowLeft.png";
-	props.rightArrowImageName = @"popoverArrowRight.png";
-	return props;	
 }
 
 - (void)resetToolbar {

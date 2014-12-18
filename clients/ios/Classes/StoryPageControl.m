@@ -65,6 +65,8 @@
 }
 
 - (void)viewDidLoad {
+    [super viewDidLoad];
+    
 	currentPage = [[StoryDetailViewController alloc]
                    initWithNibName:@"StoryDetailViewController"
                    bundle:nil];
@@ -85,12 +87,15 @@
 	[self.scrollView addSubview:currentPage.view];
 	[self.scrollView addSubview:nextPage.view];
     [self.scrollView addSubview:previousPage.view];
+    [self addChildViewController:currentPage];
+    [self addChildViewController:nextPage];
+    [self addChildViewController:previousPage];
     [self.scrollView setPagingEnabled:YES];
 	[self.scrollView setScrollEnabled:YES];
 	[self.scrollView setShowsHorizontalScrollIndicator:NO];
 	[self.scrollView setShowsVerticalScrollIndicator:NO];
     
-    popoverClass = [WEPopoverController class];
+    popoverClass = [WYPopoverController class];
     
     // adding HUD for progress bar    
     CGFloat radius = 8;
@@ -182,7 +187,22 @@
     _orientation = [UIApplication sharedApplication].statusBarOrientation;
 }
 
+
+- (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)interfaceOrientation {
+    return YES;
+}
+
+- (BOOL)automaticallyForwardAppearanceAndRotationMethodsToChildViewControllers {
+    return YES;
+}
+
+- (BOOL)shouldAutomaticallyForwardAppearanceMethods {
+    return YES;
+}
+
 - (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    
     [self setNextPreviousButtons];
     [appDelegate adjustStoryDetailWebView];
     [self setTextButton];
@@ -207,6 +227,8 @@
             } else if (appDelegate.storiesCollection.isSavedView &&
                        appDelegate.storiesCollection.activeSavedStoryTag) {
                 titleImage = [UIImage imageNamed:@"tag.png"];
+            } else if ([appDelegate.storiesCollection.activeFolder isEqualToString:@"read_stories"]) {
+                titleImage = [UIImage imageNamed:@"g_icn_folder_read.png"];
             } else if ([appDelegate.storiesCollection.activeFolder isEqualToString:@"saved_stories"]) {
                 titleImage = [UIImage imageNamed:@"clock.png"];
             } else if (appDelegate.storiesCollection.isRiverView) {
@@ -258,6 +280,8 @@
 }
 
 - (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    
     // set the subscribeButton flag
     if (appDelegate.isTryFeedView && UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
         self.subscribeButton.title = [NSString stringWithFormat:@"Follow %@",
@@ -268,14 +292,17 @@
     appDelegate.isTryFeedView = NO;
     [self applyNewIndex:previousPage.pageIndex pageController:previousPage];
     previousPage.view.hidden = NO;
-    NSLog(@"Story Page Control did appear");
 }
 
 - (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+    
     self.navigationItem.leftBarButtonItem = nil;
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
+    
     previousPage.view.hidden = YES;
     self.navigationController.interactivePopGestureRecognizer.enabled = YES;
 }
@@ -285,21 +312,30 @@
     [appDelegate.masterContainerViewController transitionFromFeedDetail];
 }
 
-- (void)didRotateFromInterfaceOrientation:(UIInterfaceOrientation)fromInterfaceOrientation {
-//    [self changePage:currentPage.pageIndex animated:YES];
+- (void)didRotateFromInterfaceOrientation:(UIInterfaceOrientation)fromInterfaceOrientation {        
+        [appDelegate adjustStoryDetailWebView];
+        
+//        CGPoint scrollPosition = CGPointMake(0, scrollPct * currentPage.webView.scrollView.contentSize.height);
+//        NSLog(@"Scrolling to %2.2f%% of %.0f", scrollPct*100, currentPage.webView.scrollView.contentSize.height);
+//        
+//        [currentPage.webView.scrollView setContentOffset:scrollPosition animated:YES];
+    inRotation = NO;
 }
 
 - (void)willAnimateRotationToInterfaceOrientation:(UIInterfaceOrientation)toInterfaceOrientation
                                          duration:(NSTimeInterval)duration {
+    inRotation = YES;
+    
     if (UIInterfaceOrientationIsPortrait(toInterfaceOrientation)) {
-        NSLog(@"Rotate: %f,%f",self.view.frame.size.width,self.view.frame.size.height);
+        NSLog(@"Rotating to portrait: %.0f,%.0f",self.view.frame.size.width,self.view.frame.size.height);
         
     } else if (UIInterfaceOrientationIsLandscape(toInterfaceOrientation)){
-        NSLog(@"Rotate: %f,%f",self.view.frame.size.width,self.view.frame.size.height);
+        NSLog(@"Rotating to landscape: %.0f,%.0f",self.view.frame.size.width,self.view.frame.size.height);
     }
     
     [self layoutForInterfaceOrientation:toInterfaceOrientation];
     [self adjustDragBar:toInterfaceOrientation];
+    [self reorientPages:toInterfaceOrientation];
 }
 
 - (void)layoutForInterfaceOrientation:(UIInterfaceOrientation)interfaceOrientation {
@@ -307,10 +343,12 @@
 //        appDelegate.masterContainerViewController.originalViewIsVisible) {
 //        return;
 //    }
-    NSLog(@"layout for stories: %@", NSStringFromCGRect(self.view.frame));
+//    NSLog(@"layout for stories: %@", NSStringFromCGRect(self.view.frame));
     if (interfaceOrientation != _orientation) {
         _orientation = interfaceOrientation;
-        [self refreshPages];
+        scrollPct = currentPage.webView.scrollView.contentOffset.y / currentPage.webView.scrollView.contentSize.height;
+        NSLog(@"Current scroll is %2.2f%% (offset %.0f - height %.0f)", scrollPct*100, currentPage.webView.scrollView.contentOffset.y,
+              currentPage.webView.scrollView.contentSize.height);
         if (currentPage.pageIndex == 0) {
             previousPage.view.hidden = YES;
         }
@@ -392,6 +430,23 @@
     //    self.scrollView.contentOffset = CGPointMake(self.scrollView.frame.size.width * currentPage.pageIndex, 0);
 }
 
+- (void)reorientPages:(UIInterfaceOrientation)fromOrientation {
+    [self applyNewIndex:currentPage.pageIndex-1 pageController:previousPage supressRedraw:YES];
+    [self applyNewIndex:currentPage.pageIndex+1 pageController:nextPage supressRedraw:YES];
+    [self applyNewIndex:currentPage.pageIndex pageController:currentPage supressRedraw:YES];
+
+    NSInteger currentIndex = currentPage.pageIndex;
+    [self resizeScrollView]; // Will change currentIndex, so preserve
+    
+    // Scroll back to preserved index
+    CGRect frame = self.scrollView.frame;
+    frame.origin.x = frame.size.width * currentIndex;
+    frame.origin.y = 0;
+    [self.scrollView scrollRectToVisible:frame animated:NO];
+
+    [MBProgressHUD hideHUDForView:self.view animated:YES];
+}
+
 - (void)refreshHeaders {
     [currentPage setActiveStoryAtIndex:[appDelegate.storiesCollection
                                         indexOfStoryId:currentPage.activeStoryId]];
@@ -455,6 +510,12 @@
 
 - (void)applyNewIndex:(NSInteger)newIndex
        pageController:(StoryDetailViewController *)pageController {
+    [self applyNewIndex:newIndex pageController:pageController supressRedraw:NO];
+}
+
+- (void)applyNewIndex:(NSInteger)newIndex
+       pageController:(StoryDetailViewController *)pageController
+        supressRedraw:(BOOL)suppressRedraw {
 	NSInteger pageCount = [[appDelegate.storiesCollection activeFeedStoryLocations] count];
 	BOOL outOfBounds = newIndex >= pageCount || newIndex < 0;
     
@@ -475,8 +536,11 @@
 		pageController.view.frame = pageFrame;
 	}
     
+    if (suppressRedraw) return;
+    
+    NSInteger wasIndex = pageController.pageIndex;
 	pageController.pageIndex = newIndex;
-//    NSLog(@"Applied Index: Was %d, now %d (%d/%d/%d) [%d stories - %d]", wasIndex, newIndex, previousPage.pageIndex, currentPage.pageIndex, nextPage.pageIndex, [appDelegate.activeFeedStoryLocations count], outOfBounds);
+    NSLog(@"Applied Index: Was %ld, now %ld (%ld/%ld/%ld) [%lu stories - %d]", (long)wasIndex, (long)newIndex, (long)previousPage.pageIndex, (long)currentPage.pageIndex, (long)nextPage.pageIndex, (unsigned long)[appDelegate.storiesCollection.activeFeedStoryLocations count], outOfBounds);
     
     if (newIndex > 0 && newIndex >= [appDelegate.storiesCollection.activeFeedStoryLocations count]) {
         pageController.pageIndex = -2;
@@ -512,7 +576,9 @@
         [pageController clearStory];
     }
     
-    [self resizeScrollView];
+    if (!suppressRedraw) {
+        [self resizeScrollView];
+    }
     [self setTextButton];
     [self.loadingIndicator stopAnimating];
     self.circularProgressView.hidden = NO;
@@ -520,6 +586,7 @@
 
 - (void)scrollViewDidScroll:(UIScrollView *)sender {
 //    [sender setContentOffset:CGPointMake(sender.contentOffset.x, 0)];
+    if (inRotation) return;
     CGFloat pageWidth = self.scrollView.frame.size.width;
     float fractionalPage = self.scrollView.contentOffset.x / pageWidth;
 	
@@ -756,6 +823,8 @@
     }
     
     [self setNextPreviousButtons];
+    EventWindow *tapDetectingWindow = (EventWindow*)appDelegate.window;
+    tapDetectingWindow.tapDetectingView = currentPage.view;
     [appDelegate changeActiveFeedDetailRow];
     
     if (self.currentPage.pageIndex != location) {
@@ -849,7 +918,6 @@
         return [self requestFailed:request];
     }
     
-    [appDelegate.storiesCollection markStory:request.userInfo asSaved:YES];
     [appDelegate.feedDetailViewController redrawUnreadStory];
     [self refreshHeaders];
     [self.currentPage flashCheckmarkHud:@"saved"];
@@ -906,8 +974,8 @@
 }
 
 - (IBAction)tapProgressBar:(id)sender {
-    [MBProgressHUD hideHUDForView:self.view animated:NO];
-    MBProgressHUD *hud = [MBProgressHUD showHUDAddedTo:self.view animated:YES];
+    [MBProgressHUD hideHUDForView:currentPage.webView animated:NO];
+    MBProgressHUD *hud = [MBProgressHUD showHUDAddedTo:currentPage.webView animated:YES];
 	hud.mode = MBProgressHUDModeText;
 	hud.removeFromSuperViewOnHide = YES;
     NSInteger unreadCount = appDelegate.unreadCount;
@@ -940,7 +1008,7 @@
         [appDelegate.masterContainerViewController showFontSettingsPopover:self.fontSettingsButton];
     } else {
         if (self.popoverController == nil) {
-            self.popoverController = [[WEPopoverController alloc]
+            self.popoverController = [[WYPopoverController alloc]
                                       initWithContentViewController:appDelegate.fontSettingsViewController];
             
             self.popoverController.delegate = self;
@@ -949,9 +1017,6 @@
             self.popoverController = nil;
         }
         
-        if ([self.popoverController respondsToSelector:@selector(setContainerViewProperties:)]) {
-            [self.popoverController setContainerViewProperties:[self improvedContainerViewProperties]];
-        }
         [self.popoverController setPopoverContentSize:CGSizeMake(240, 38*8-2)];
         [self.popoverController presentPopoverFromBarButtonItem:self.fontSettingsButton
                                        permittedArrowDirections:UIPopoverArrowDirectionAny
@@ -982,7 +1047,7 @@
 
 - (void)showShareHUD:(NSString *)msg {
 //    [MBProgressHUD hideHUDForView:self.view animated:NO];
-    self.storyHUD = [MBProgressHUD showHUDAddedTo:self.view animated:YES];
+    self.storyHUD = [MBProgressHUD showHUDAddedTo:currentPage.webView animated:YES];
     self.storyHUD.labelText = msg;
     self.storyHUD.margin = 20.0f;
     self.currentPage.noStoryMessage.hidden = YES;
@@ -1050,55 +1115,16 @@
 }
 
 #pragma mark -
-#pragma mark WEPopoverControllerDelegate implementation
+#pragma mark WYPopoverControllerDelegate implementation
 
-- (void)popoverControllerDidDismissPopover:(WEPopoverController *)thePopoverController {
+- (void)popoverControllerDidDismissPopover:(WYPopoverController *)thePopoverController {
 	//Safe to release the popover here
 	self.popoverController = nil;
 }
 
-- (BOOL)popoverControllerShouldDismissPopover:(WEPopoverController *)thePopoverController {
+- (BOOL)popoverControllerShouldDismissPopover:(WYPopoverController *)thePopoverController {
 	//The popover is automatically dismissed if you click outside it, unless you return NO here
 	return YES;
-}
-
-
-/**
- Thanks to Paul Solt for supplying these background images and container view properties
- */
-- (WEPopoverContainerViewProperties *)improvedContainerViewProperties {
-	
-	WEPopoverContainerViewProperties *props = [WEPopoverContainerViewProperties alloc];
-	NSString *bgImageName = nil;
-	CGFloat bgMargin = 0.0;
-	CGFloat bgCapSize = 0.0;
-	CGFloat contentMargin = 5.0;
-	
-	bgImageName = @"popoverBg.png";
-	
-	// These constants are determined by the popoverBg.png image file and are image dependent
-	bgMargin = 13; // margin width of 13 pixels on all sides popoverBg.png (62 pixels wide - 36 pixel background) / 2 == 26 / 2 == 13
-	bgCapSize = 31; // ImageSize/2  == 62 / 2 == 31 pixels
-	
-	props.leftBgMargin = bgMargin;
-	props.rightBgMargin = bgMargin;
-	props.topBgMargin = bgMargin;
-	props.bottomBgMargin = bgMargin;
-	props.leftBgCapSize = bgCapSize;
-	props.topBgCapSize = bgCapSize;
-	props.bgImageName = bgImageName;
-	props.leftContentMargin = contentMargin;
-	props.rightContentMargin = contentMargin - 1; // Need to shift one pixel for border to look correct
-	props.topContentMargin = contentMargin;
-	props.bottomContentMargin = contentMargin;
-	
-	props.arrowMargin = 4.0;
-	
-	props.upArrowImageName = @"popoverArrowUp.png";
-	props.downArrowImageName = @"popoverArrowDown.png";
-	props.leftArrowImageName = @"popoverArrowLeft.png";
-	props.rightArrowImageName = @"popoverArrowRight.png";
-	return props;
 }
 
 @end
