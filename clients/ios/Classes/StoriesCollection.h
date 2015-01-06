@@ -28,6 +28,8 @@
     BOOL isSocialView;
     BOOL isSocialRiverView;
     BOOL transferredFromDashboard;
+    BOOL inSearch;
+    NSString *searchQuery;
 }
 
 @property (nonatomic) NewsBlurAppDelegate *appDelegate;
@@ -51,7 +53,10 @@
 @property (nonatomic, readwrite) BOOL isSocialView;
 @property (nonatomic, readwrite) BOOL isSocialRiverView;
 @property (nonatomic, readwrite) BOOL isSavedView;
+@property (nonatomic, readwrite) BOOL isReadView;
 @property (nonatomic, readwrite) BOOL transferredFromDashboard;
+@property (nonatomic, readwrite) BOOL inSearch;
+@property (nonatomic) NSString *searchQuery;
 
 - (id)initForDashboard;
 - (void)reset;
@@ -92,9 +97,9 @@
 - (void)markStoryUnread:(NSString *)storyId feedId:(id)feedId;
 - (void)markStoryUnread:(NSDictionary *)story feed:(NSDictionary *)feed;
 
-- (void)markStory:story asSaved:(BOOL)saved;
+- (NSDictionary *)markStory:story asSaved:(BOOL)saved;
 - (void)toggleStorySaved;
-- (void)toggleStorySaved:(NSDictionary *)story;
+- (BOOL)toggleStorySaved:(NSDictionary *)story;
 - (void)syncStoryAsSaved:(NSDictionary *)story;
 - (void)finishMarkAsSaved:(ASIFormDataRequest *)request;
 - (void)failedMarkAsSaved:(ASIFormDataRequest *)request;

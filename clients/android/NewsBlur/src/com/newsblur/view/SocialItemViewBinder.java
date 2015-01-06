@@ -43,15 +43,9 @@ public class SocialItemViewBinder implements ViewBinder {
 			String faviconUrl = cursor.getString(columnIndex);
 			imageLoader.displayImage(faviconUrl, ((ImageView) view), true);
 			return true;
-		} else if (TextUtils.equals(columnName, DatabaseConstants.STORY_INTELLIGENCE_AUTHORS)) {
+		} else if (TextUtils.equals(columnName, DatabaseConstants.SUM_STORY_TOTAL)) {
             if (! this.ignoreIntel) {
-                int authors = cursor.getInt(columnIndex);
-                int tags = cursor.getInt(cursor.getColumnIndex(DatabaseConstants.STORY_INTELLIGENCE_TAGS));
-                int feed = cursor.getInt(cursor.getColumnIndex(DatabaseConstants.STORY_INTELLIGENCE_FEED));
-                int title = cursor.getInt(cursor.getColumnIndex(DatabaseConstants.STORY_INTELLIGENCE_TITLE));
-                
-                int score = Story.getIntelligenceTotal(title, authors, tags, feed);
-
+                int score = cursor.getInt(columnIndex);
                 Drawable icon;
                 if (score > 0) {
                     icon = view.getResources().getDrawable(R.drawable.g_icn_focus);
@@ -70,9 +64,12 @@ public class SocialItemViewBinder implements ViewBinder {
 			return true;
 		} else if (TextUtils.equals(columnName, DatabaseConstants.STORY_AUTHORS)) {
 			String authors = cursor.getString(columnIndex);
-			if (!TextUtils.isEmpty(authors)) {
-				((TextView) view).setText(authors.toUpperCase());
-			}
+            if (TextUtils.isEmpty(authors)) {
+                view.setVisibility(View.GONE);
+            } else {
+                ((TextView) view).setText(authors.toUpperCase());
+                view.setVisibility(View.VISIBLE);
+            }
 			return true;
 		} else if (TextUtils.equals(columnName, DatabaseConstants.STORY_TITLE)) {
 			((TextView) view).setText(Html.fromHtml(cursor.getString(columnIndex)));

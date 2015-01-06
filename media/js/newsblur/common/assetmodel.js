@@ -52,7 +52,8 @@ NEWSBLUR.AssetModel = Backbone.Router.extend({
             'ajax_group': 'queue',
             'traditional': true,
             'domSuccessTrigger': true,
-            'preventDoubleRequests': false
+            'preventDoubleRequests': false,
+            'timeout': 15000
         }, options);
         var request_type = options.request_type || 'POST';
         var clear_queue = false;
@@ -103,10 +104,11 @@ NEWSBLUR.AssetModel = Backbone.Router.extend({
                 NEWSBLUR.log(['AJAX Error', e, e.status, textStatus, errorThrown, 
                               !!error_callback, error_callback, $.isFunction(callback)]);
                 
+                if (errorThrown == "timeout") textStatus = "NewsBlur timed out trying<br />to connect. Just try again.";
                 if (error_callback) {
                     error_callback(e, textStatus, errorThrown);
                 } else if ($.isFunction(callback)) {
-                    var message = "Please create an account. Not much to do without an account.";
+                    var message = "Please create an account. Not much<br />to do without an account.";
                     if (NEWSBLUR.Globals.is_authenticated) {
                       message = "Sorry, there was an unhandled error.";
                     }
@@ -286,7 +288,12 @@ NEWSBLUR.AssetModel = Backbone.Router.extend({
             cutoff_timestamp: cutoff_timestamp,
             direction: direction
         }, callback);
-
+        
+        _.each(feed_ids, function(feed_id) {
+            var feed = self.get_feed(feed_id);
+            if (!feed) return;
+            feed.set({'ps': 0, 'nt': 0, 'ng': 0});
+        });
         if (mark_active) {
             this.stories.each(function(story) {
                 if ((!direction || direction == "older") && 
@@ -1006,6 +1013,20 @@ NEWSBLUR.AssetModel = Backbone.Router.extend({
         }
     },
     
+    delete_feeds_by_folder: function(feeds_by_folder, callback, error_callback) {
+        var pre_callback = _.bind(function(data) {
+            _.each(feeds_by_folder, _.bind(function(feed_in_folder) {
+                this.feeds.remove(feed_in_folder[0]);
+            }, this));
+            this.folders.reset(_.compact(data.folders), {parse: true});
+            return callback();
+        }, this);
+
+        this.make_request('/reader/delete_feeds_by_folder', {
+            'feeds_by_folder': $.toJSON(feeds_by_folder)
+        }, pre_callback, error_callback);
+    },
+    
     delete_feed_by_url: function(url, in_folder, callback) {
         this.make_request('/reader/delete_feed_by_url/', {
             'url': url,
@@ -1016,12 +1037,19 @@ NEWSBLUR.AssetModel = Backbone.Router.extend({
     },
     
     delete_folder: function(folder_name, in_folder, feeds, callback) {
+        var self = this;
+        var pre_callback = function(data) {
+            self.folders.reset(_.compact(data.folders), {parse: true});
+            self.feeds.trigger('reset');
+
+            callback(data);
+        };
         if (NEWSBLUR.Globals.is_authenticated) {
             this.make_request('/reader/delete_folder', {
                 'folder_name': folder_name,
                 'in_folder': in_folder,
                 'feed_id': feeds
-            }, callback, null);
+            }, pre_callback, null);
         } else {
             if ($.isFunction(callback)) callback();
         }
@@ -1083,6 +1111,19 @@ NEWSBLUR.AssetModel = Backbone.Router.extend({
         }, pre_callback);
     },
     
+    move_feed_to_folders: function(feed_id, in_folders, to_folders, callback) {
+        var pre_callback = _.bind(function(data) {
+            this.folders.reset(_.compact(data.folders), {parse: true});
+            return callback();
+        }, this);
+
+        this.make_request('/reader/move_feed_to_folders', {
+            'feed_id': feed_id,
+            'in_folders': in_folders,
+            'to_folders': to_folders
+        }, pre_callback);
+    },
+    
     move_folder_to_folder: function(folder_name, in_folder, to_folder, callback) {
         var pre_callback = _.bind(function(data) {
             this.folders.reset(_.compact(data.folders), {parse: true});
@@ -1094,6 +1135,19 @@ NEWSBLUR.AssetModel = Backbone.Router.extend({
             'in_folder': in_folder,
             'to_folder': to_folder
         }, pre_callback);
+    },
+    
+    move_feeds_by_folder: function(feeds_by_folder, to_folder, new_folder, callback, error_callback) {
+        var pre_callback = _.bind(function(data) {
+            this.folders.reset(_.compact(data.folders), {parse: true});
+            return callback();
+        }, this);
+
+        this.make_request('/reader/move_feeds_by_folder_to_folder', {
+            'feeds_by_folder': $.toJSON(feeds_by_folder),
+            'to_folder': to_folder,
+            'new_folder': new_folder
+        }, pre_callback, error_callback);
     },
     
     preference: function(preference, value, callback) {
@@ -1560,8 +1614,30 @@ NEWSBLUR.AssetModel = Backbone.Router.extend({
         }, callback, error_callback);
     },
     
+    update_payment_history: function(user_id, callback, error_callback) {
+        this.make_request('/profile/update_payment_history', {
+            user_id: user_id
+        }, callback, error_callback);
+    },
+    
     refund_premium: function(data, callback, error_callback) {
         this.make_request('/profile/refund_premium', data, callback, error_callback);
+    },
+    
+    delete_saved_stories: function(timestamp, callback, error_callback) {
+        var self = this;
+        var pre_callback = function(data) {
+            if (data.starred_counts) {
+                self.starred_feeds.reset(data.starred_counts, {parse: true});
+            }
+            self.starred_count = data.starred_count;
+            
+            if (callback) callback(data);
+        };
+
+        this.make_request('/profile/delete_starred_stories', {
+            timestamp: timestamp
+        }, pre_callback, error_callback);
     },
     
     delete_all_sites: function(callback, error_callback) {
@@ -1583,6 +1659,19 @@ NEWSBLUR.AssetModel = Backbone.Router.extend({
             feed_id: feed_id
         }, function(data) {
             story.set('original_text', data.original_text);
+            callback(data);
+        }, error_callback, {
+            request_type: 'GET',
+            ajax_group: 'statistics'
+        });
+    },
+    
+    fetch_original_story_page: function(story_hash, callback, error_callback) {
+        var story = this.get_story(story_hash);
+        this.make_request('/rss_feeds/original_story', {
+            story_hash: story_hash
+        }, function(data) {
+            story.set('original_page', data.original_page);
             callback(data);
         }, error_callback, {
             request_type: 'GET',

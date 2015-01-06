@@ -9,14 +9,14 @@
 #import <UIKit/UIKit.h>
 #import "BaseViewController.h"
 #import "NewsBlurAppDelegate.h"
-#import "WEPopoverController.h"
+#import "WYPopoverController.h"
 #import "THCircularProgressView.h"
 
 @class NewsBlurAppDelegate;
 @class ASIHTTPRequest;
 
 @interface StoryPageControl : BaseViewController
-<UIScrollViewDelegate, UIPopoverControllerDelegate, UIGestureRecognizerDelegate, WEPopoverControllerDelegate> {
+<UIScrollViewDelegate, UIPopoverControllerDelegate, UIGestureRecognizerDelegate, WYPopoverControllerDelegate> {
     
     NewsBlurAppDelegate *appDelegate;
 
@@ -30,13 +30,15 @@
     UIView *progressView;
     UIView *progressViewContainer;
     
-    WEPopoverController *popoverController;
+    WYPopoverController *popoverController;
 	Class popoverClass;
     
     BOOL isDraggingScrollview;
     BOOL isAnimatedIntoPlace;
+    BOOL inRotation;
     BOOL waitingForNextUnreadFromServer;
     UIInterfaceOrientation _orientation;
+    CGFloat scrollPct;
 }
 
 @property (nonatomic) IBOutlet NewsBlurAppDelegate *appDelegate;
@@ -74,7 +76,7 @@
 @property (nonatomic) MBProgressHUD *storyHUD;
 @property (nonatomic) NSInteger scrollingToPage;
 
-@property (nonatomic, strong) WEPopoverController *popoverController;
+@property (nonatomic, strong) WYPopoverController *popoverController;
 
 - (void)resizeScrollView;
 - (void)applyNewIndex:(NSInteger)newIndex pageController:(StoryDetailViewController *)pageController;
@@ -85,6 +87,7 @@
 - (void)resetPages;
 - (void)hidePages;
 - (void)refreshPages;
+- (void)reorientPages:(UIInterfaceOrientation)fromOrientation;
 - (void)refreshHeaders;
 - (void)setStoryFromScroll;
 - (void)setStoryFromScroll:(BOOL)force;

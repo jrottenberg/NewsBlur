@@ -21,8 +21,7 @@
 #import "JSON.h"
 #import "StringHelper.h"
 #import "Utilities.h"
-#import "UIBarButtonItem+WEPopover.h"
-#import "WEPopoverController.h"
+#import "WYPopoverController.h"
 #import "UIBarButtonItem+Image.h"
 #import "FeedDetailMenuViewController.h"
 #import "NBNotifier.h"
@@ -35,9 +34,9 @@
 #import "DashboardViewController.h"
 #import "StoriesCollection.h"
 
-#define kTableViewRowHeight 38;
-#define kTableViewRiverRowHeight 60;
-#define kTableViewShortRowDifference 15;
+#define kTableViewRowHeight 46;
+#define kTableViewRiverRowHeight 68;
+#define kTableViewShortRowDifference 17;
 #define kMarkReadActionSheet 1;
 #define kSettingsActionSheet 2;
 
@@ -61,12 +60,14 @@
 @synthesize actionSheet_;
 @synthesize finishedAnimatingIn;
 @synthesize notifier;
+@synthesize searchBar;
 @synthesize isOnline;
 @synthesize isShowingFetching;
 @synthesize isDashboardModule;
 @synthesize storiesCollection;
 @synthesize showContentPreview;
 @synthesize showImagePreview;
+@synthesize invalidateFontCache;
 
 
 - (id)initWithNibName:(NSString *)nibNameOrNil bundle:(NSBundle *)nibBundleOrNil {
@@ -84,7 +85,7 @@
                                                  name:UIContentSizeCategoryDidChangeNotification
                                                object:nil];
 
-    popoverClass = [WEPopoverController class];
+    popoverClass = [WYPopoverController class];
     self.storyTitlesTable.backgroundColor = UIColorFromRGB(0xf4f4f4);
     self.storyTitlesTable.separatorColor = UIColorFromRGB(0xE9E8E4);
     
@@ -94,6 +95,17 @@
     spacer2BarButton = [[UIBarButtonItem alloc]
                         initWithBarButtonSystemItem:UIBarButtonSystemItemFixedSpace target:nil action:nil];
     spacer2BarButton.width = 0;
+    
+    self.searchBar = [[UISearchBar alloc]
+                 initWithFrame:CGRectMake(0, 0, CGRectGetWidth(self.storyTitlesTable.frame), 44.)];
+    self.searchBar.delegate = self;
+    [self.searchBar setReturnKeyType:UIReturnKeySearch];
+    [self.searchBar setBackgroundColor:UIColorFromRGB(0xDCDFD6)];
+    [self.searchBar setTintColor:[UIColor whiteColor]];
+    [self.searchBar setSearchBarStyle:UISearchBarStyleMinimal];
+    [self.searchBar setAutocapitalizationType:UITextAutocapitalizationTypeNone];
+    self.storyTitlesTable.tableHeaderView = self.searchBar;
+    self.storyTitlesTable.keyboardDismissMode = UIScrollViewKeyboardDismissModeOnDrag;
     
     UIImage *separatorImage = [UIImage imageNamed:@"bar-separator.png"];
     separatorBarButton = [UIBarButtonItem barItemWithImage:separatorImage target:nil action:nil];
@@ -182,7 +194,50 @@
     return YES;
 }
 
+- (void)searchBarTextDidBeginEditing:(UISearchBar *)searchBar {
+    [self.searchBar setShowsCancelButton:YES animated:YES];
+}
+
+- (void)searchBarTextDidEndEditing:(UISearchBar *)searchBar {
+    if ([self.searchBar.text length]) {
+        [self.searchBar setShowsCancelButton:YES animated:YES];
+    } else {
+        [self.searchBar setShowsCancelButton:NO animated:YES];
+    }
+    [self.searchBar resignFirstResponder];
+}
+
+- (void)searchBarCancelButtonClicked:(UISearchBar *)searchBar {
+    [self.searchBar setText:@""];
+    [self.searchBar resignFirstResponder];
+    storiesCollection.inSearch = NO;
+    storiesCollection.searchQuery = nil;
+    [self reloadStories];
+}
+
+- (void)searchBarSearchButtonClicked:(UISearchBar*) theSearchBar {
+    [self.searchBar resignFirstResponder];
+}
+
+- (BOOL)disablesAutomaticKeyboardDismissal {
+    return NO;
+}
+
+- (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)searchText {
+    if ([searchText length]) {
+        storiesCollection.inSearch = YES;
+        storiesCollection.searchQuery = searchText;
+        [self reloadStories];
+    } else {
+        storiesCollection.inSearch = NO;
+        storiesCollection.searchQuery = nil;
+        [self reloadStories];
+    }
+}
+
 - (void)preferredContentSizeChanged:(NSNotification *)aNotification {
+    appDelegate.fontDescriptorTitleSize = nil;
+
     [self.storyTitlesTable reloadData];
 }
 
@@ -190,7 +245,9 @@
     NSUserDefaults *userPreferences = [NSUserDefaults standardUserDefaults];
     self.showContentPreview = [userPreferences boolForKey:@"story_list_preview_description"];
     self.showImagePreview = [userPreferences boolForKey:@"story_list_preview_images"];
-
+    
+    appDelegate.fontDescriptorTitleSize = nil;
+    
     [self.storyTitlesTable reloadData];
 }
 
@@ -212,8 +269,10 @@
 }
 
 - (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    
     self.appDelegate = (NewsBlurAppDelegate *)[[UIApplication sharedApplication] delegate];
-
+    
     UIInterfaceOrientation orientation = [UIApplication sharedApplication].statusBarOrientation;
     [self setUserAvatarLayout:orientation];
     self.finishedAnimatingIn = NO;
@@ -269,15 +328,15 @@
     appDelegate.originalStoryCount = (int)[appDelegate unreadCount];
     
     if ((storiesCollection.isSocialRiverView ||
-         storiesCollection.isSocialView ||
-         storiesCollection.isSavedView)) {
+         storiesCollection.isSocialView)) {
         settingsBarButton.enabled = NO;
     } else {
         settingsBarButton.enabled = YES;
     }
     
     if (storiesCollection.isSocialRiverView ||
-        storiesCollection.isSavedView) {
+        storiesCollection.isSavedView ||
+        storiesCollection.isReadView) {
         feedMarkReadButton.enabled = NO;
     } else {
         feedMarkReadButton.enabled = YES;
@@ -298,8 +357,22 @@
         !appDelegate.masterContainerViewController.interactiveOriginalTransition) {
         [appDelegate.masterContainerViewController transitionToFeedDetail:NO];
     }
+    
+    if (!storiesCollection.inSearch && storiesCollection.feedPage == 1) {
+        [self.storyTitlesTable setContentOffset:CGPointMake(0, CGRectGetHeight(self.searchBar.frame))];
+    }
+    if (storiesCollection.inSearch && storiesCollection.searchQuery) {
+        [self.searchBar setText:storiesCollection.searchQuery];
+    } else {
+        [self.searchBar setText:@""];
+    }
+    if ([self.searchBar.text length]) {
+        [self.searchBar setShowsCancelButton:YES animated:YES];
+    } else {
+        [self.searchBar setShowsCancelButton:NO animated:YES];
+    }
 
-    [self testForTryFeed];
+//    [self testForTryFeed];
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -310,20 +383,40 @@
         [self checkScroll];
     }
     
+    if (invalidateFontCache) {
+        invalidateFontCache = NO;
+        [self reloadData];
+    }
+    
     self.finishedAnimatingIn = YES;
     if ([storiesCollection.activeFeedStories count] ||
         self.isDashboardModule) {
         [self.storyTitlesTable reloadData];
     }
-    NSLog(@"Detail did appear");
+
     [self.notifier setNeedsLayout];
 }
 
+- (void)viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
+    
+    [self.searchBar resignFirstResponder];
+}
+
 - (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+    
+    [self.searchBar resignFirstResponder];
     [self.popoverController dismissPopoverAnimated:YES];
     self.popoverController = nil;
     UIInterfaceOrientation orientation = [UIApplication sharedApplication].statusBarOrientation;
-
+    
+    if (self.isMovingToParentViewController) {
+        appDelegate.inFindingStoryMode = NO;
+        appDelegate.tryFeedStoryId = nil;
+        [MBProgressHUD hideHUDForView:self.view animated:YES];
+    }
+    
     if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad &&
         self.isMovingToParentViewController &&
         (appDelegate.masterContainerViewController.storyTitlesOnLeft ||
@@ -387,24 +480,35 @@
     self.isShowingFetching = NO;
 //    self.feedPage = 1;
     appDelegate.activeStory = nil;
+    [storiesCollection setStories:nil];
+    [storiesCollection setFeedUserProfiles:nil];
+    storiesCollection.storyCount = 0;
     if (!self.isDashboardModule) {
         [appDelegate.storyPageControl resetPages];
     }
+    storiesCollection.inSearch = NO;
+    storiesCollection.searchQuery = nil;
+    [self.searchBar setText:@""];
     [self.notifier hideIn:0];
     [self cancelRequests];
     [self beginOfflineTimer];
     [appDelegate.cacheImagesOperationQueue cancelAllOperations];
 }
 
-- (void)reloadPage {
-    [self resetFeedDetail];
-
+- (void)reloadStories {
+    appDelegate.hasLoadedFeedDetail = NO;
+    appDelegate.activeStory = nil;
     [storiesCollection setStories:nil];
+    [storiesCollection setFeedUserProfiles:nil];
     storiesCollection.storyCount = 0;
     storiesCollection.activeClassifiers = [NSMutableDictionary dictionary];
     storiesCollection.activePopularAuthors = [NSArray array];
     storiesCollection.activePopularTags = [NSArray array];
-        
+    self.pageFetching = NO;
+    self.pageFinished = NO;
+    self.isOnline = YES;
+    self.isShowingFetching = NO;
+    
     if (storiesCollection.isRiverView) {
         [self fetchRiverPage:1 withCallback:nil];
     } else {
@@ -521,6 +625,9 @@
             }];
         });
     }
+    if (!storiesCollection.inSearch && storiesCollection.feedPage == 1) {
+        [self.storyTitlesTable setContentOffset:CGPointMake(0, CGRectGetHeight(self.searchBar.frame))];
+    }
     
     if (!self.isOnline) {
         [self loadOfflineStories];
@@ -543,6 +650,11 @@
                             NEWSBLUR_URL,
                             storiesCollection.feedPage,
                             [storiesCollection.activeSavedStoryTag urlEncode]];
+    } else if (storiesCollection.isReadView) {
+        theFeedDetailURL = [NSString stringWithFormat:
+                            @"%@/reader/read_stories/?page=%d&v=2",
+                            NEWSBLUR_URL,
+                            storiesCollection.feedPage];
     } else {
         theFeedDetailURL = [NSString stringWithFormat:@"%@/reader/feed/%@/?page=%d",
                             NEWSBLUR_URL,
@@ -556,7 +668,11 @@
     theFeedDetailURL = [NSString stringWithFormat:@"%@&read_filter=%@",
                         theFeedDetailURL,
                         [storiesCollection activeReadFilter]];
-    
+    if (storiesCollection.inSearch && storiesCollection.searchQuery) {
+        theFeedDetailURL = [NSString stringWithFormat:@"%@&query=%@",
+                            theFeedDetailURL,
+                            [storiesCollection.searchQuery stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding]];
+    }
     [self cancelRequests];
     __weak ASIHTTPRequest *request = [self requestWithURL:theFeedDetailURL];
     [request setDelegate:self];
@@ -705,6 +821,9 @@
 
     }
     
+    if (!storiesCollection.inSearch && storiesCollection.feedPage == 1) {
+        [self.storyTitlesTable setContentOffset:CGPointMake(0, CGRectGetHeight(self.searchBar.frame))];
+    }
     if (storiesCollection.feedPage == 1) {
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT,
                                                  (unsigned long)NULL), ^(void) {
@@ -741,6 +860,11 @@
                             @"%@/reader/starred_stories/?page=%d&v=2",
                             NEWSBLUR_URL,
                             storiesCollection.feedPage];
+    } else if (storiesCollection.isReadView) {
+        theFeedDetailURL = [NSString stringWithFormat:
+                            @"%@/reader/read_stories/?page=%d&v=2",
+                            NEWSBLUR_URL,
+                            storiesCollection.feedPage];
     } else {
         theFeedDetailURL = [NSString stringWithFormat:
                             @"%@/reader/river_stories/?f=%@&page=%d", 
@@ -756,6 +880,11 @@
     theFeedDetailURL = [NSString stringWithFormat:@"%@&read_filter=%@",
                         theFeedDetailURL,
                         [storiesCollection activeReadFilter]];
+    if (storiesCollection.inSearch && storiesCollection.searchQuery) {
+        theFeedDetailURL = [NSString stringWithFormat:@"%@&query=%@",
+                            theFeedDetailURL,
+                            [storiesCollection.searchQuery stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding]];
+    }
 
     [self cancelRequests];
     __weak ASIHTTPRequest *request = [self requestWithURL:theFeedDetailURL];
@@ -819,11 +948,19 @@
                              JSONObjectWithData:responseData
                              options:kNilOptions 
                              error:&error];
+    
+    if (storiesCollection.isSavedView &&
+        ![[results objectForKey:@"stories"] count] &&
+        storiesCollection.feedPage == 1 &&
+        [results objectForKey:@"message"]) {
+        [self informError:nil details:[results objectForKey:@"message"]];
+    }
     id feedId = [results objectForKey:@"feed_id"];
     NSString *feedIdStr = [NSString stringWithFormat:@"%@",feedId];
     
     if (!(storiesCollection.isRiverView ||
           storiesCollection.isSavedView ||
+          storiesCollection.isReadView ||
           storiesCollection.isSocialView ||
           storiesCollection.isSocialRiverView)
         && request.tag != [feedId intValue]) {
@@ -831,7 +968,8 @@
     }
     if (storiesCollection.isSocialView ||
         storiesCollection.isSocialRiverView ||
-        storiesCollection.isSavedView) {
+        storiesCollection.isSavedView ||
+        storiesCollection.isReadView) {
         NSArray *newFeeds = [results objectForKey:@"feeds"];
         for (int i = 0; i < newFeeds.count; i++){
             NSString *feedKey = [NSString stringWithFormat:@"%@", [[newFeeds objectAtIndex:i] objectForKey:@"id"]];
@@ -844,6 +982,7 @@
     NSMutableDictionary *newClassifiers = [[results objectForKey:@"classifiers"] mutableCopy];
     if (storiesCollection.isRiverView ||
         storiesCollection.isSavedView ||
+        storiesCollection.isReadView ||
         storiesCollection.isSocialView ||
         storiesCollection.isSocialRiverView) {
         for (id key in [newClassifiers allKeys]) {
@@ -978,8 +1117,17 @@
     if (self.isDashboardModule ||
         !appDelegate.inFindingStoryMode ||
         !appDelegate.tryFeedStoryId) return;
-
+    
+    if (!self.view.window) {
+        NSLog(@"No longer looking for try feed.");
+        appDelegate.inFindingStoryMode = NO;
+        appDelegate.tryFeedStoryId = nil;
+        return;
+    }
     NSLog(@"Test for try feed");
+    [MBProgressHUD hideHUDForView:self.view animated:YES];
+    MBProgressHUD *HUD = [MBProgressHUD showHUDAddedTo:self.view animated:YES];
+    HUD.labelText = @"Finding story...";
 
     for (int i = 0; i < [storiesCollection.activeFeedStories count]; i++) {
         NSString *storyIdStr = [[storiesCollection.activeFeedStories
@@ -1084,7 +1232,8 @@
     
     if (storiesCollection.isRiverView ||
         storiesCollection.isSocialView ||
-        storiesCollection.isSavedView) {
+        storiesCollection.isSavedView ||
+        storiesCollection.isReadView) {
         cellIdentifier = @"FeedRiverDetailCellIdentifier";
     } else {
         cellIdentifier = @"FeedDetailCellIdentifier";
@@ -1193,6 +1342,7 @@
     cell.isRiverOrSocial = NO;
     if (storiesCollection.isRiverView ||
         storiesCollection.isSavedView ||
+        storiesCollection.isReadView ||
         storiesCollection.isSocialView ||
         storiesCollection.isSocialRiverView) {
         cell.isRiverOrSocial = YES;
@@ -1201,7 +1351,7 @@
     if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad && !self.isDashboardModule) {
         NSInteger rowIndex = [storiesCollection locationOfActiveStory];
         if (rowIndex == indexPath.row) {
-            [self.storyTitlesTable selectRowAtIndexPath:indexPath animated:NO scrollPosition:UITableViewScrollPositionNone];
+            [tableView selectRowAtIndexPath:indexPath animated:NO scrollPosition:UITableViewScrollPositionNone];
         } 
     }
     
@@ -1236,6 +1386,8 @@
                 feedTitle = @"All Stories";
             } else if (storiesCollection.isSavedView && storiesCollection.activeSavedStoryTag) {
                 feedTitle = storiesCollection.activeSavedStoryTag;
+            } else if ([storiesCollection.activeFolder isEqualToString:@"read_stories"]) {
+                feedTitle = @"Read Stories";
             } else if ([storiesCollection.activeFolder isEqualToString:@"saved_stories"]) {
                 feedTitle = @"Saved Stories";
             } else {
@@ -1280,6 +1432,7 @@
             NSDictionary *activeStory = [[storiesCollection activeFeedStories] objectAtIndex:storyIndex];
             appDelegate.activeStory = activeStory;
             [appDelegate openDashboardRiverForStory:[activeStory objectForKey:@"story_hash"] showFindingStory:NO];
+            
         } else {
             FeedDetailTableCell *cell = (FeedDetailTableCell*) [tableView cellForRowAtIndexPath:indexPath];
             NSInteger storyIndex = [storiesCollection indexFromLocation:indexPath.row];
@@ -1291,6 +1444,9 @@
                 return;
             }
             [self loadStory:cell atRow:indexPath.row];
+        }
+        if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+            [appDelegate.dashboardViewController.storiesModule.view endEditing:YES];
         }
     }
 }
@@ -1321,6 +1477,7 @@ heightForRowAtIndexPath:(NSIndexPath *)indexPath {
         return 40;
     } else if (storiesCollection.isRiverView ||
                storiesCollection.isSavedView ||
+               storiesCollection.isReadView ||
                storiesCollection.isSocialView ||
                storiesCollection.isSocialRiverView) {
         NSInteger height = kTableViewRiverRowHeight;
@@ -1361,7 +1518,10 @@ heightForRowAtIndexPath:(NSIndexPath *)indexPath {
 }
 
 - (UIFontDescriptor *)fontDescriptorUsingPreferredSize:(NSString *)textStyle {
-    UIFontDescriptor *fontDescriptor = [UIFontDescriptor preferredFontDescriptorWithTextStyle:textStyle];
+    UIFontDescriptor *fontDescriptor = appDelegate.fontDescriptorTitleSize;
+    if (fontDescriptor) return fontDescriptor;
+    
+    fontDescriptor = [UIFontDescriptor preferredFontDescriptorWithTextStyle:textStyle];
     NSUserDefaults *userPreferences = [NSUserDefaults standardUserDefaults];
 
     if (![userPreferences boolForKey:@"use_system_font_size"]) {
@@ -1704,7 +1864,7 @@ didEndSwipingSwipingWithState:(MCSwipeTableViewCellState)state
         [appDelegate.masterContainerViewController showFeedDetailMenuPopover:self.settingsBarButton];
     } else {
         if (self.popoverController == nil) {
-            self.popoverController = [[WEPopoverController alloc]
+            self.popoverController = [[WYPopoverController alloc]
                                       initWithContentViewController:(UIViewController *)appDelegate.feedDetailMenuViewController];
             [appDelegate.feedDetailMenuViewController buildMenuOptions];
             self.popoverController.delegate = self;
@@ -1713,9 +1873,6 @@ didEndSwipingSwipingWithState:(MCSwipeTableViewCellState)state
             self.popoverController = nil;
         }
         
-        if ([self.popoverController respondsToSelector:@selector(setContainerViewProperties:)]) {
-            [self.popoverController setContainerViewProperties:[self improvedContainerViewProperties]];
-        }
         NSInteger menuCount = [appDelegate.feedDetailMenuViewController.menuOptions count] + 2;
         [self.popoverController setPopoverContentSize:CGSizeMake(260, 38 * menuCount)];
         [self.popoverController presentPopoverFromBarButtonItem:self.settingsBarButton
@@ -1988,52 +2145,16 @@ didEndSwipingSwipingWithState:(MCSwipeTableViewCellState)state
 }
 
 #pragma mark -
-#pragma mark WEPopoverControllerDelegate implementation
+#pragma mark WYPopoverControllerDelegate implementation
 
-- (void)popoverControllerDidDismissPopover:(WEPopoverController *)thePopoverController {
+- (void)popoverControllerDidDismissPopover:(WYPopoverController *)thePopoverController {
 	//Safe to release the popover here
 	self.popoverController = nil;
 }
 
-- (BOOL)popoverControllerShouldDismissPopover:(WEPopoverController *)thePopoverController {
+- (BOOL)popoverControllerShouldDismissPopover:(WYPopoverController *)thePopoverController {
 	//The popover is automatically dismissed if you click outside it, unless you return NO here
 	return YES;
 }
-
-- (WEPopoverContainerViewProperties *)improvedContainerViewProperties {
-	
-	WEPopoverContainerViewProperties *props = [WEPopoverContainerViewProperties alloc];
-	NSString *bgImageName = nil;
-	CGFloat bgMargin = 0.0;
-	CGFloat bgCapSize = 0.0;
-	CGFloat contentMargin = 5.0;
-	
-	bgImageName = @"popoverBg.png";
-	
-	// These constants are determined by the popoverBg.png image file and are image dependent
-	bgMargin = 13; // margin width of 13 pixels on all sides popoverBg.png (62 pixels wide - 36 pixel background) / 2 == 26 / 2 == 13
-	bgCapSize = 31; // ImageSize/2  == 62 / 2 == 31 pixels
-	
-	props.leftBgMargin = bgMargin;
-	props.rightBgMargin = bgMargin;
-	props.topBgMargin = bgMargin;
-	props.bottomBgMargin = bgMargin;
-	props.leftBgCapSize = bgCapSize;
-	props.topBgCapSize = bgCapSize;
-	props.bgImageName = bgImageName;
-	props.leftContentMargin = contentMargin;
-	props.rightContentMargin = contentMargin - 1; // Need to shift one pixel for border to look correct
-	props.topContentMargin = contentMargin;
-	props.bottomContentMargin = contentMargin;
-	
-	props.arrowMargin = 4.0;
-	
-	props.upArrowImageName = @"popoverArrowUp.png";
-	props.downArrowImageName = @"popoverArrowDown.png";
-	props.leftArrowImageName = @"popoverArrowLeft.png";
-	props.rightArrowImageName = @"popoverArrowRight.png";
-	return props;
-}
-
 
 @end

@@ -50,6 +50,8 @@
 }
 
 - (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    
     [self.menuTableView reloadData];
     
     [orderSegmentedControl
@@ -90,6 +92,10 @@
 - (void)buildMenuOptions {
     BOOL everything = appDelegate.storiesCollection.isRiverView &&
                       [appDelegate.storiesCollection.activeFolder isEqualToString:@"everything"];
+    BOOL read = appDelegate.storiesCollection.isRiverView &&
+                [appDelegate.storiesCollection.activeFolder isEqualToString:@"read_stories"];
+    BOOL saved = appDelegate.storiesCollection.isRiverView &&
+                 [appDelegate.storiesCollection.activeFolder isEqualToString:@"saved_stories"];
 
     NSMutableArray *options = [NSMutableArray array];
     
@@ -97,7 +103,7 @@
     //                        appDelegate.storiesCollection.activeFolder :
     //                        [appDelegate.storiesCollection.activeFeed objectForKey:@"feed_title"];
     
-    if (!everything) {
+    if (!everything && !read && !saved) {
         NSString *deleteText = [NSString stringWithFormat:@"Delete %@",
                                 appDelegate.storiesCollection.isRiverView ?
                                 @"this entire folder" :
@@ -122,7 +128,9 @@
     [self buildMenuOptions];
     int filterOptions = 2;
     if (appDelegate.storiesCollection.isSocialRiverView ||
-        appDelegate.storiesCollection.isSocialView) {
+        appDelegate.storiesCollection.isSocialView ||
+        appDelegate.storiesCollection.isSavedView ||
+        appDelegate.storiesCollection.isReadView) {
         filterOptions = 1;
     }
     
@@ -239,7 +247,7 @@
     
     [userPreferences synchronize];
     
-    [appDelegate.feedDetailViewController reloadPage];
+    [appDelegate.feedDetailViewController reloadStories];
 }
 
 - (IBAction)changeReadFilter:(id)sender {
@@ -253,7 +261,7 @@
     
     [userPreferences synchronize];
     
-    [appDelegate.feedDetailViewController reloadPage];
+    [appDelegate.feedDetailViewController reloadStories];
     
 }
 

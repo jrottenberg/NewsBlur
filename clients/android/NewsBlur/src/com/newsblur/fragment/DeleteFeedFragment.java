@@ -2,6 +2,8 @@ package com.newsblur.fragment;
 
 import com.newsblur.R;
 import com.newsblur.activity.Main;
+import com.newsblur.domain.Feed;
+import com.newsblur.domain.SocialFeed;
 import com.newsblur.network.APIManager;
 import com.newsblur.util.FeedUtils;
 
@@ -11,21 +13,52 @@ import android.app.Dialog;
 import android.content.DialogInterface;
 import android.os.Bundle;
 import android.app.DialogFragment;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.View.OnClickListener;
+import android.widget.Button;
+import android.widget.TextView;
+import android.widget.Toast;
 
 public class DeleteFeedFragment extends DialogFragment {
-	private static final String FEED_ID = "feed_url";
+	private static final String FEED_ID = "feed_id";
 	private static final String FEED_NAME = "feed_name";
 	private static final String FOLDER_NAME = "folder_name";
     
-    public static DeleteFeedFragment newInstance(final long feedId, final String feedName, final String folderName) {
+    public static DeleteFeedFragment newInstance(Feed feed, String folderName) {
     	DeleteFeedFragment frag = new DeleteFeedFragment();
 		Bundle args = new Bundle();
-		args.putLong(FEED_ID, feedId);
-		args.putString(FEED_NAME, feedName);
-		args.putString(FOLDER_NAME, folderName);
+		args.putString(FEED_ID, feed.feedId);
+		args.putString(FEED_NAME, feed.title);
+		args.putString(FOLDER_NAME, parseFolderName(folderName));
 		frag.setArguments(args);
 		return frag;
 	}
+
+    public static DeleteFeedFragment newInstance(SocialFeed feed, String folderName) {
+    	DeleteFeedFragment frag = new DeleteFeedFragment();
+		Bundle args = new Bundle();
+		args.putString(FEED_ID, feed.userId);
+		args.putString(FEED_NAME, feed.feedTitle);
+		args.putString(FOLDER_NAME, parseFolderName(folderName));
+		frag.setArguments(args);
+		return frag;
+	}
+
+    /**
+     * Nested folders are named "parent" - "child" so we need to find the last "-"
+     * and pull out the child folder name for the delete to succeed.
+     */
+    private static String parseFolderName(String folderName) {
+        int index = folderName.lastIndexOf("-");
+        if (index == -1) {
+            return folderName;
+        } else {
+            // + 2 to ignore - and the first whitespace
+            return folderName.substring(index + 2);
+        }
+    }
 
     @Override
     public Dialog onCreateDialog(Bundle savedInstanceState) {
@@ -34,12 +67,12 @@ public class DeleteFeedFragment extends DialogFragment {
         builder.setPositiveButton(R.string.alert_dialog_ok, new DialogInterface.OnClickListener() {
             @Override
             public void onClick(DialogInterface dialogInterface, int i) {
-                FeedUtils.deleteFeed(getArguments().getLong(FEED_ID), getArguments().getString(FOLDER_NAME), getActivity(), new APIManager(getActivity()));
+                FeedUtils.deleteFeed(getArguments().getString(FEED_ID), getArguments().getString(FOLDER_NAME), getActivity(), new APIManager(getActivity()));
                 // if called from main view then refresh otherwise it was
                 // called from the feed view so finish
                 Activity activity = DeleteFeedFragment.this.getActivity();
                 if (activity instanceof Main) {
-                    ((Main)activity).updateAfterSync();
+                    ((Main)activity).handleUpdate(true);
                 } else {
                     activity.finish();
                 }

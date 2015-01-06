@@ -26,6 +26,7 @@
 #import "TrainerViewController.h"
 #import "OvershareKit.h"
 #import "StoriesCollection.h"
+#import "UserTagsViewController.h"
 
 #define NB_DEFAULT_MASTER_WIDTH 270
 #define NB_DEFAULT_MASTER_WIDTH_LANDSCAPE 370
@@ -175,6 +176,8 @@
 }
 
 - (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    
     [self layoutDashboardScreen];
 }
 
@@ -224,6 +227,9 @@
     } else if (!self.originalViewIsVisible) {
         [self layoutFeedDetailScreen];
     }
+    if (self.feedDetailIsVisible) {
+        [self.storyPageControl reorientPages:fromInterfaceOrientation];
+    }
 }
 
 - (NSInteger)masterWidth {
@@ -246,10 +252,9 @@
     popoverController = [[UIPopoverController alloc]
                          initWithContentViewController:appDelegate.userProfileNavigationController];
     
-    popoverController.delegate = self;
-    
+    [popoverController setDelegate:self];
     [popoverController setPopoverContentSize:CGSizeMake(320, 454)];
-
+    [appDelegate.userProfileNavigationController view];
     if ([sender class] == [InteractionCell class] ||
         [sender class] == [ActivityCell class]) {
         InteractionCell *cell = (InteractionCell *)sender;
@@ -305,6 +310,7 @@
     popoverController = [[UIPopoverController alloc]
                          initWithContentViewController:appDelegate.feedsMenuViewController];
     [popoverController setDelegate:self];
+    [appDelegate.feedsMenuViewController view];
     NSInteger menuCount = [appDelegate.feedsMenuViewController.menuOptions count];
     [popoverController setPopoverContentSize:CGSizeMake(200, 38 * menuCount)];
     [popoverController presentPopoverFromBarButtonItem:sender
@@ -325,6 +331,7 @@
     [appDelegate.feedDetailMenuViewController buildMenuOptions];
     popoverController.delegate = self;
     
+    [appDelegate.feedDetailMenuViewController view];
     NSInteger menuCount = [appDelegate.feedDetailMenuViewController.menuOptions count] + 2;
     [popoverController setPopoverContentSize:CGSizeMake(260, 38 * menuCount)];
     [popoverController presentPopoverFromBarButtonItem:sender
@@ -361,12 +368,12 @@
     popoverController = [[UIPopoverController alloc]
                          initWithContentViewController:appDelegate.trainerViewController];
     popoverController.delegate = self;
-
+    
     [popoverController setPopoverContentSize:CGSizeMake(420, 382)];
     if ([sender class] == [UIBarButtonItem class]) {
-       [popoverController presentPopoverFromBarButtonItem:sender
-                                 permittedArrowDirections:UIPopoverArrowDirectionAny
-                                                 animated:NO];
+        [popoverController presentPopoverFromBarButtonItem:sender
+                                  permittedArrowDirections:UIPopoverArrowDirectionAny
+                                                  animated:NO];
     } else if ([sender class] == [FeedTableCell class]) {
         FeedTableCell *cell = (FeedTableCell *)sender;
         [popoverController presentPopoverFromRect:cell.bounds
@@ -380,12 +387,30 @@
                          permittedArrowDirections:UIPopoverArrowDirectionAny
                                          animated:YES];
     } else {
-       CGRect frame = [sender CGRectValue];
-       [popoverController presentPopoverFromRect:frame
-                                          inView:self.storyPageControl.view
-                        permittedArrowDirections:UIPopoverArrowDirectionAny
-                                        animated:YES];
+        CGRect frame = [sender CGRectValue];
+        [popoverController presentPopoverFromRect:frame
+                                           inView:self.storyPageControl.view
+                         permittedArrowDirections:UIPopoverArrowDirectionAny
+                                         animated:YES];
     }
+}
+
+- (void)showUserTagsPopover:(id)sender {
+    if (popoverController.isPopoverVisible) {
+        [popoverController dismissPopoverAnimated:NO];
+    }
+    
+    popoverController = [[UIPopoverController alloc]
+                         initWithContentViewController:appDelegate.userTagsViewController];
+    popoverController.delegate = self;
+    
+    [popoverController setPopoverContentSize:CGSizeMake(220, 382)];
+    [appDelegate.userTagsViewController view]; // Force viewDidLoad
+    CGRect frame = [sender CGRectValue];
+    [popoverController presentPopoverFromRect:frame
+                                       inView:self.storyPageControl.currentPage.view
+                     permittedArrowDirections:UIPopoverArrowDirectionAny
+                                     animated:YES];
 }
 
 - (void)showSendToPopover:(id)sender {
@@ -475,7 +500,7 @@
         [self.dashboardViewController.view removeFromSuperview];
         self.originalNavigationController.view.frame = CGRectMake(vb.size.width, 0, vb.size.width, vb.size.height);
 //        leftBorder.frame = CGRectMake(0, 0, 1, CGRectGetHeight(self.view.bounds));
-        NSLog(@"Transitioning back to feed detail, original frame: %@", NSStringFromCGRect(self.originalNavigationController.view.frame));
+//        NSLog(@"Transitioning back to feed detail, original frame: %@", NSStringFromCGRect(self.originalNavigationController.view.frame));
     }
 }
 
@@ -567,6 +592,7 @@
 }
 - (void)transitionToFeedDetail:(BOOL)resetLayout {
     [self hidePopover];
+    if (self.feedDetailIsVisible) resetLayout = NO;
     self.feedDetailIsVisible = YES;
     
     if (resetLayout) {
@@ -757,7 +783,7 @@
 }
 
 - (void)transitionFromOriginalView {
-    NSLog(@"Transition from Original View");
+//    NSLog(@"Transition from Original View");
     
     [self.originalViewController viewWillDisappear:YES];
     self.originalViewIsVisible = NO;
@@ -926,13 +952,14 @@
     self.storyPageControl.traverseView.hidden = YES;
     
     // adding shareViewController
+    [self.shareNavigationController removeFromParentViewController];
     [self addChildViewController:self.shareNavigationController];
     [self.view insertSubview:self.shareNavigationController.view
                 aboveSubview:self.storyNavigationController.view];
     [self.shareNavigationController didMoveToParentViewController:self];
 
     self.shareNavigationController.view.frame = CGRectMake(self.storyNavigationController.view.frame.origin.x, 
-                                                           vb.size.height, 
+                                                           vb.size.height,
                                                            self.storyPageControl.view.frame.size.width,
                                                            NB_DEFAULT_SHARE_HEIGHT);
     [self.storyPageControl resizeScrollView];
@@ -944,8 +971,8 @@
     [self.shareNavigationController.view setNeedsDisplay];
     [self.shareViewController.commentField becomeFirstResponder];
 
-    if (!self.keyboardIsShown)
-        [self keyboardWillShowOrHide:nil];
+//    if (!self.keyboardIsShown)
+//        [self keyboardWillShowOrHide:nil];
 }
 
 - (void)transitionFromShareView {
@@ -1087,8 +1114,8 @@
             storyNavigationFrame.size.height = vb.size.height - NB_DEFAULT_SHARE_HEIGHT - keyboardFrame.size.height + 44;
             shareViewFrame.origin.y = vb.size.height - NB_DEFAULT_SHARE_HEIGHT - keyboardFrame.size.height;
         } else {
-            storyNavigationFrame.size.height = vb.size.height - NB_DEFAULT_SHARE_HEIGHT - keyboardFrame.size.width + 44;
-            shareViewFrame.origin.y = vb.size.height - NB_DEFAULT_SHARE_HEIGHT - keyboardFrame.size.width;
+            storyNavigationFrame.size.height = vb.size.height - NB_DEFAULT_SHARE_HEIGHT - keyboardFrame.size.height + 44;
+            shareViewFrame.origin.y = vb.size.height - NB_DEFAULT_SHARE_HEIGHT - keyboardFrame.size.height;
         }
     } else if (self.isSharingStory) {
         if (UIInterfaceOrientationIsPortrait(orientation)) {

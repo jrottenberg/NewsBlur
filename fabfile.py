@@ -280,6 +280,7 @@ def setup_task(queue=None, skip_common=False):
     done()
 
 def setup_task_image():
+    setup_installs()
     copy_task_settings()
     setup_hosts()
     config_pgbouncer()
@@ -332,9 +333,12 @@ def setup_installs():
         'libfreetype6-dev',
         'python-imaging',
     ]
+    # sudo("sed -i -e 's/archive.ubuntu.com\|security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list")
+    put("config/apt_sources.conf", "/etc/apt/sources.list", use_sudo=True)
+    
     sudo('apt-get -y update')
-    sudo('DEBIAN_FRONTEND=noninteractive apt-get -y --force-yes upgrade')
-    sudo('DEBIAN_FRONTEND=noninteractive apt-get -y --force-yes install %s' % ' '.join(packages))
+    sudo('DEBIAN_FRONTEND=noninteractive apt-get -y --force-yes -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" dist-upgrade')
+    sudo('DEBIAN_FRONTEND=noninteractive apt-get -y --force-yes -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" install %s' % ' '.join(packages))
     
     with settings(warn_only=True):
         sudo("ln -s /usr/lib/x86_64-linux-gnu/libjpeg.so /usr/lib")
@@ -441,6 +445,7 @@ def pip():
     with cd(env.NEWSBLUR_PATH):
         sudo('easy_install -U pip')
         sudo('pip install --upgrade pip')
+        sudo('pip install --upgrade six') # Stupid cryptography bug requires upgraded six
         sudo('pip install -r requirements.txt')
     
 # PIL - Only if python-imaging didn't install through apt-get, like on Mac OS X.
@@ -485,6 +490,11 @@ def config_monit_task():
 
 def config_monit_node():
     put('config/monit_node.conf', '/etc/monit/conf.d/node.conf', use_sudo=True)
+    sudo('echo "START=yes" > /etc/default/monit')
+    sudo('/etc/init.d/monit restart')
+
+def config_monit_original():
+    put('config/monit_original.conf', '/etc/monit/conf.d/node_original.conf', use_sudo=True)
     sudo('echo "START=yes" > /etc/default/monit')
     sudo('/etc/init.d/monit restart')
 
@@ -632,15 +642,19 @@ def setup_app_firewall():
 def setup_app_motd():
     put('config/motd_app.txt', '/etc/motd.tail', use_sudo=True)
 
+def remove_gunicorn():
+    with cd(env.VENDOR_PATH):
+        sudo('rm -fr gunicorn')
+    
 def setup_gunicorn(supervisor=True):
     if supervisor:
         put('config/supervisor_gunicorn.conf', '/etc/supervisor/conf.d/gunicorn.conf', use_sudo=True)
-    with cd(env.VENDOR_PATH):
-        sudo('rm -fr gunicorn')
-        run('git clone git://github.com/benoitc/gunicorn.git')
-    with cd(os.path.join(env.VENDOR_PATH, 'gunicorn')):
-        run('git pull')
-        sudo('python setup.py develop')
+    # with cd(env.VENDOR_PATH):
+    #     sudo('rm -fr gunicorn')
+    #     run('git clone git://github.com/benoitc/gunicorn.git')
+    # with cd(os.path.join(env.VENDOR_PATH, 'gunicorn')):
+    #     run('git pull')
+    #     sudo('python setup.py develop')
 
 
 def update_gunicorn():
@@ -704,12 +718,12 @@ def maintenance_off():
 def setup_haproxy(debug=False):
     sudo('ufw allow 81')    # nginx moved
     sudo('ufw allow 1936')  # haproxy stats
-    sudo('apt-get install -y haproxy')
-    sudo('apt-get remove -y haproxy')
+    # sudo('apt-get install -y haproxy')
+    # sudo('apt-get remove -y haproxy')
     with cd(env.VENDOR_PATH):
-        run('wget http://haproxy.1wt.eu/download/1.5/src/devel/haproxy-1.5-dev17.tar.gz')
-        run('tar -xf haproxy-1.5-dev17.tar.gz')
-        with cd('haproxy-1.5-dev17'):
+        run('wget http://www.haproxy.org/download/1.5/src/haproxy-1.5.6.tar.gz')
+        run('tar -xf haproxy-1.5.6.tar.gz')
+        with cd('haproxy-1.5.6'):
             run('make TARGET=linux2628 USE_PCRE=1 USE_OPENSSL=1 USE_ZLIB=1')
             sudo('make install')
     put('config/haproxy-init', '/etc/init.d/haproxy', use_sudo=True)
@@ -1002,13 +1016,14 @@ def setup_original_page_server():
     setup_node_app()
     sudo('mkdir -p /srv/originals')
     sudo('chown %s.%s -R /srv/originals' % (env.user, env.user))        # We assume that the group is the same name as the user. It's common on linux
+    config_monit_original()
     put('config/supervisor_node_original.conf',
         '/etc/supervisor/conf.d/node_original.conf', use_sudo=True)
     sudo('supervisorctl reread')
     sudo('supervisorctl reload')
 
 def setup_elasticsearch():
-    ES_VERSION = "0.90.0"
+    ES_VERSION = "0.90.13"
     sudo('apt-get update')
     sudo('apt-get install openjdk-7-jre -y')
 
@@ -1017,7 +1032,7 @@ def setup_elasticsearch():
     with cd(os.path.join(env.VENDOR_PATH, 'elasticsearch-%s' % ES_VERSION)):
         run('wget http://download.elasticsearch.org/elasticsearch/elasticsearch/elasticsearch-%s.deb' % ES_VERSION)
         sudo('dpkg -i elasticsearch-%s.deb' % ES_VERSION)
-        sudo('/usr/share/elasticsearch/bin/plugin -install mobz/elasticsearch-head' % ES_VERSION)
+        sudo('/usr/share/elasticsearch/bin/plugin -install mobz/elasticsearch-head')
 
 def setup_db_search():
     put('config/supervisor_celeryd_search_indexer.conf', '/etc/supervisor/conf.d/celeryd_search_indexer.conf', use_sudo=True)
@@ -1066,6 +1081,10 @@ def copy_task_settings():
             '%s/local_settings.py' % env.NEWSBLUR_PATH)
         run('echo "\nSERVER_NAME = \\\\"%s\\\\"" >> %s/local_settings.py' % (host, env.NEWSBLUR_PATH))
 
+@parallel
+def copy_spam():
+    put(os.path.join(env.SECRETS_PATH, 'spam/spam.py'), '%s/apps/social/spam.py' % env.NEWSBLUR_PATH)
+    
 # =========================
 # = Setup - Digital Ocean =
 # =========================
@@ -1199,8 +1218,8 @@ def post_deploy():
     cleanup_assets()
 
 @parallel
-def deploy(fast=False):
-    deploy_code(copy_assets=False, fast=fast)
+def deploy(fast=False, reload=False):
+    deploy_code(copy_assets=False, fast=fast, reload=reload)
 
 @parallel
 def deploy_web(fast=False):
@@ -1216,7 +1235,7 @@ def kill_gunicorn():
         sudo('pkill -9 -u %s -f gunicorn_django' % env.user)
                 
 @parallel
-def deploy_code(copy_assets=False, full=False, fast=False):
+def deploy_code(copy_assets=False, full=False, fast=False, reload=False):
     with cd(env.NEWSBLUR_PATH):
         run('git pull')
         run('mkdir -p static')
@@ -1224,9 +1243,13 @@ def deploy_code(copy_assets=False, full=False, fast=False):
             run('rm -fr static/*')
         if copy_assets:
             transfer_assets()
-        sudo('supervisorctl reload')
-        if fast:
+            
+        if reload:
+            sudo('supervisorctl reload')
+        elif fast:
             kill_gunicorn()
+        else:
+            sudo('kill -HUP `cat /srv/newsblur/logs/gunicorn.pid`')
 
 @parallel
 def kill():

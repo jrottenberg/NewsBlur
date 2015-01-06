@@ -7,6 +7,8 @@ import java.io.InputStream;
 import java.net.URL;
 import java.net.URLConnection;
 import java.util.Date;
+import java.util.HashSet;
+import java.util.Set;
 
 import android.app.Activity;
 import android.content.Context;
@@ -17,16 +19,20 @@ import android.content.pm.PackageManager.NameNotFoundException;
 import android.graphics.Bitmap;
 import android.graphics.Bitmap.CompressFormat;
 import android.graphics.BitmapFactory;
+import android.net.ConnectivityManager;
+import android.net.NetworkInfo;
+import android.os.Build;
 import android.util.Log;
 
 import com.newsblur.R;
 import com.newsblur.activity.Login;
-import com.newsblur.database.BlurDatabase;
 import com.newsblur.domain.UserDetails;
+import com.newsblur.service.NBSyncService;
 
 public class PrefsUtils {
 
 	public static void saveLogin(final Context context, final String userName, final String cookie) {
+        NBSyncService.resumeFromInterrupt();
 		final SharedPreferences preferences = context.getSharedPreferences(PrefConstants.PREFERENCES, 0);
 		final Editor edit = preferences.edit();
 		edit.putString(PrefConstants.PREF_COOKIE, cookie);
@@ -37,26 +43,24 @@ public class PrefsUtils {
     /**
      * Check to see if this is the first launch of the app after an upgrade, in which case
      * we clear the DB to prevent bugs associated with non-forward-compatibility.
+     * @return true if an upgrade was detected.
      */
-    public static void checkForUpgrade(Context context) {
+    public static boolean checkForUpgrade(Context context) {
 
         SharedPreferences prefs = context.getSharedPreferences(PrefConstants.PREFERENCES, 0);
 
-        String version;
-        try {
-            version = context.getPackageManager().getPackageInfo(context.getPackageName(), 0).versionName;
-        } catch (NameNotFoundException nnfe) {
+        String version = getVersion(context);
+        if (version == null) {
             Log.w(PrefsUtils.class.getName(), "could not determine app version");
-            return;
+            return false;
         }
-        Log.i(PrefsUtils.class.getName(), "launching version: " + version);
+        if (AppConstants.VERBOSE_LOG) Log.i(PrefsUtils.class.getName(), "launching version: " + version);
 
         String oldVersion = prefs.getString(AppConstants.LAST_APP_VERSION, null);
         if ( (oldVersion == null) || (!oldVersion.equals(version)) ) {
             Log.i(PrefsUtils.class.getName(), "detected new version of app, clearing local data");
             // wipe the local DB
-            BlurDatabase databaseHelper = new BlurDatabase(context.getApplicationContext());
-            databaseHelper.dropAndRecreateTables();
+            FeedUtils.dropAndRecreateTables();
             // in case this is the first time we have run since moving the cache to the new location,
             // blow away the old version entirely. This line can be removed some time well after
             // v61+ is widely deployed
@@ -65,26 +69,72 @@ public class PrefsUtils {
             prefs.edit().putString(AppConstants.LAST_APP_VERSION, version).commit();
             // also make sure we auto-trigger an update, since all data are now gone
             prefs.edit().putLong(AppConstants.LAST_SYNC_TIME, 0L).commit();
+            return true;
         }
+        return false;
 
     }
 
-    public static void logout(Context context) {
+    public static String getVersion(Context context) {
+        try {
+            return context.getPackageManager().getPackageInfo(context.getPackageName(), 0).versionName;
+        } catch (NameNotFoundException nnfe) {
+            Log.w(PrefsUtils.class.getName(), "could not determine app version");
+            return null;
+        }
+    }
 
-        // TODO: stop or wait for any BG processes
+    public static String createFeedbackLink(Context context) {
+        StringBuilder s = new StringBuilder(AppConstants.FEEDBACK_URL);
+        s.append("<give us some feedback!>%0A%0A");
+        s.append("%0Aapp version: ").append(getVersion(context));
+        s.append("%0Aandroid version: ").append(Build.VERSION.RELEASE);
+        s.append("%0Adevice: ").append(Build.MANUFACTURER + "+" + Build.MODEL + "+(" + Build.BOARD + ")");
+        s.append("%0Amemory: ").append(NBSyncService.isMemoryLow() ? "low" : "normal");
+        s.append("%0Aspeed: ").append(NBSyncService.getSpeedInfo());
+        s.append("%0Apremium: ");
+        if (NBSyncService.isPremium == Boolean.TRUE) {
+            s.append("yes");
+        } else if (NBSyncService.isPremium == Boolean.FALSE) {
+            s.append("no");
+        } else {
+            s.append("unknown");
+        }
+        return s.toString();
+    }
+
+    public static void logout(Context context) {
+        NBSyncService.softInterrupt();
 
         // wipe the prefs store
         context.getSharedPreferences(PrefConstants.PREFERENCES, 0).edit().clear().commit();
-        
+
         // wipe the local DB
-        BlurDatabase databaseHelper = new BlurDatabase(context.getApplicationContext());
-        databaseHelper.dropAndRecreateTables();
+        FeedUtils.dropAndRecreateTables();
         
         // prompt for a new login
         Intent i = new Intent(context, Login.class);
         i.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
         context.startActivity(i);
+    }
 
+    public static void clearPrefsAndDbForLoginAs(Context context) {
+        NBSyncService.softInterrupt();
+
+        // wipe the prefs store except for the cookie and login keys since we need to
+        // authenticate further API calls
+        SharedPreferences prefs = context.getSharedPreferences(PrefConstants.PREFERENCES, 0);
+        Set<String> keys = new HashSet<String>(prefs.getAll().keySet());
+        keys.remove(PrefConstants.PREF_COOKIE);
+        keys.remove(PrefConstants.PREF_UNIQUE_LOGIN);
+        SharedPreferences.Editor editor = prefs.edit();
+        for (String key : keys) {
+            editor.remove(key);
+        }
+        editor.commit();
+
+        // wipe the local DB
+        FeedUtils.dropAndRecreateTables();
     }
 
 	/**
@@ -187,6 +237,17 @@ public class PrefsUtils {
         prefs.edit().putLong(AppConstants.LAST_SYNC_TIME, (new Date()).getTime()).commit();
     }
 
+    public static boolean isTimeToVacuum(Context context) {
+        SharedPreferences prefs = context.getSharedPreferences(PrefConstants.PREFERENCES, 0);
+        long lastTime = prefs.getLong(PrefConstants.LAST_VACUUM_TIME, 1L);
+        return ( (lastTime + AppConstants.VACUUM_TIME_MILLIS) < (new Date()).getTime() );
+    }
+
+    public static void updateLastVacuumTime(Context context) {
+        SharedPreferences prefs = context.getSharedPreferences(PrefConstants.PREFERENCES, 0);
+        prefs.edit().putLong(PrefConstants.LAST_VACUUM_TIME, (new Date()).getTime()).commit();
+    }
+
     public static StoryOrder getStoryOrderForFeed(Context context, String feedId) {
         SharedPreferences prefs = context.getSharedPreferences(PrefConstants.PREFERENCES, 0);
         return StoryOrder.valueOf(prefs.getString(PrefConstants.FEED_STORY_ORDER_PREFIX + feedId, getDefaultStoryOrder(prefs).toString()));
@@ -237,6 +298,11 @@ public class PrefsUtils {
     
     private static StoryOrder getDefaultStoryOrder(SharedPreferences prefs) {
         return StoryOrder.valueOf(prefs.getString(PrefConstants.DEFAULT_STORY_ORDER, StoryOrder.NEWEST.toString()));
+    }
+
+    public static StoryOrder getDefaultStoryOrder(Context context) {
+        SharedPreferences preferences = context.getSharedPreferences(PrefConstants.PREFERENCES, 0);
+        return getDefaultStoryOrder(preferences);
     }
     
     private static ReadFilter getDefaultReadFilter(SharedPreferences prefs) {
@@ -291,6 +357,62 @@ public class PrefsUtils {
         editor.commit();
     }
 
+    public static StoryOrder getStoryOrder(Context context, FeedSet fs) {
+        if (fs.isAllNormal()) {
+            return getStoryOrderForFolder(context, PrefConstants.ALL_STORIES_FOLDER_NAME);
+        }
+        if (fs.getSingleFeed() != null) {
+            return getStoryOrderForFeed(context, fs.getSingleFeed());
+        }
+        if (fs.getMultipleFeeds() != null) {
+            return getStoryOrderForFolder(context, fs.getFolderName());
+        }
+
+        if (fs.isAllSocial()) {
+            return getStoryOrderForFolder(context, PrefConstants.ALL_SHARED_STORIES_FOLDER_NAME);
+        }
+        if (fs.getSingleSocialFeed() != null) {
+            return getStoryOrderForFeed(context, fs.getSingleSocialFeed().getKey());
+        }
+        if (fs.getMultipleSocialFeeds() != null) {
+            throw new IllegalArgumentException( "requests for multiple social feeds not supported" );
+        }
+
+        if (fs.isAllSaved()) {
+            return getStoryOrderForFolder(context, PrefConstants.SAVED_STORIES_FOLDER_NAME);
+        }
+
+        throw new IllegalArgumentException( "unknown type of feed set" );
+    }
+
+    public static ReadFilter getReadFilter(Context context, FeedSet fs) {
+        if (fs.isAllNormal()) {
+            return getReadFilterForFolder(context, PrefConstants.ALL_STORIES_FOLDER_NAME);
+        }
+        if (fs.getSingleFeed() != null) {
+            return getReadFilterForFeed(context, fs.getSingleFeed());
+        }
+        if (fs.getMultipleFeeds() != null) {
+            return getReadFilterForFolder(context, fs.getFolderName());
+        }
+
+        if (fs.isAllSocial()) {
+            return getReadFilterForFolder(context, PrefConstants.ALL_SHARED_STORIES_FOLDER_NAME);
+        }
+        if (fs.getSingleSocialFeed() != null) {
+            return getReadFilterForFeed(context, fs.getSingleSocialFeed().getKey());
+        }
+        if (fs.getMultipleSocialFeeds() != null) {
+            throw new IllegalArgumentException( "requests for multiple social feeds not supported" );
+        }
+
+        if (fs.isAllSaved()) {
+            return getReadFilterForFolder(context, PrefConstants.SAVED_STORIES_FOLDER_NAME);
+        }
+
+        throw new IllegalArgumentException( "unknown type of feed set" );
+    }
+
     private static DefaultFeedView getDefaultFeedView() {
         return DefaultFeedView.STORY;
     }
@@ -303,6 +425,46 @@ public class PrefsUtils {
     public static boolean isShowContentPreviews(Context context) {
         SharedPreferences prefs = context.getSharedPreferences(PrefConstants.PREFERENCES, 0);
         return prefs.getBoolean(PrefConstants.STORIES_SHOW_PREVIEWS, true);
+    }
+
+    public static boolean isOfflineEnabled(Context context) {
+        SharedPreferences prefs = context.getSharedPreferences(PrefConstants.PREFERENCES, 0);
+        return prefs.getBoolean(PrefConstants.ENABLE_OFFLINE, false);
+    }
+
+    public static boolean isImagePrefetchEnabled(Context context) {
+        SharedPreferences prefs = context.getSharedPreferences(PrefConstants.PREFERENCES, 0);
+        return prefs.getBoolean(PrefConstants.ENABLE_IMAGE_PREFETCH, false);
+    }
+
+    /**
+     * Compares the user's setting for when background data use is allowed against the
+     * current network status and sees if it is okay to sync.
+     */
+    public static boolean isBackgroundNetworkAllowed(Context context) {
+        SharedPreferences prefs = context.getSharedPreferences(PrefConstants.PREFERENCES, 0);
+        String mode = prefs.getString(PrefConstants.NETWORK_SELECT, PrefConstants.NETWORK_SELECT_NOMO);
+
+        ConnectivityManager connMgr = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+        NetworkInfo activeInfo = connMgr.getActiveNetworkInfo();
+
+        // if we aren't even online, there is no way bg data will work
+        if ((activeInfo == null) || (!activeInfo.isConnected())) return false;
+
+        // if user restricted use of mobile nets, make sure we aren't on one
+        int type = activeInfo.getType();
+        if (mode.equals(PrefConstants.NETWORK_SELECT_NOMO)) {
+            if (! ((type == ConnectivityManager.TYPE_WIFI) || (type == ConnectivityManager.TYPE_ETHERNET))) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    public static boolean isKeepOldStories(Context context) {
+        SharedPreferences prefs = context.getSharedPreferences(PrefConstants.PREFERENCES, 0);
+        return prefs.getBoolean(PrefConstants.KEEP_OLD_STORIES, false);
     }
 
     public static void applyThemePreference(Activity activity) {
@@ -319,5 +481,17 @@ public class PrefsUtils {
         SharedPreferences prefs = context.getSharedPreferences(PrefConstants.PREFERENCES, 0);
         String theme = prefs.getString(PrefConstants.THEME, "light");
         return theme.equals("light");
+    }
+
+    public static StateFilter getStateFilter(Context context) {
+        SharedPreferences prefs = context.getSharedPreferences(PrefConstants.PREFERENCES, 0);
+        return StateFilter.valueOf(prefs.getString(PrefConstants.STATE_FILTER, StateFilter.SOME.toString()));
+    }
+
+    public static void setStateFilter(Context context, StateFilter newValue) {
+        SharedPreferences prefs = context.getSharedPreferences(PrefConstants.PREFERENCES, 0);
+        Editor editor = prefs.edit();
+        editor.putString(PrefConstants.STATE_FILTER, newValue.toString());
+        editor.commit();
     }
 }

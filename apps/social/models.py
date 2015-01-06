@@ -9,7 +9,6 @@ import random
 import requests
 import HTMLParser
 from collections import defaultdict
-from pprint import pprint
 from BeautifulSoup import BeautifulSoup
 from mongoengine.queryset import Q
 from django.conf import settings
@@ -36,6 +35,12 @@ from utils.story_functions import truncate_chars, strip_tags, linkify, image_siz
 from utils.scrubber import SelectiveScriptScrubber
 from utils import s3_utils
 from StringIO import StringIO
+
+try:
+    from apps.social.spam import detect_spammers
+except ImportError:
+    logging.debug(" ---> ~SN~FRCouldn't find ~SBspam.py~SN.")
+    pass
 
 RECOMMENDATIONS_LIMIT = 5
 IGNORE_IMAGE_SOURCES = [
@@ -204,7 +209,7 @@ class MSocialProfile(mongo.Document):
         profile_user_ids = []
         
         # Find potential twitter/fb friends
-        services = MSocialServices.objects.get(user_id=self.user_id)
+        services = MSocialServices.get_user(self.user_id)
         facebook_user_ids = [u.user_id for u in 
                             MSocialServices.objects.filter(facebook_uid__in=services.facebook_friend_ids).only('user_id')]
         twitter_user_ids = [u.user_id for u in 
@@ -340,7 +345,7 @@ class MSocialProfile(mongo.Document):
                 self.photo_url = 'http:' + self.photo_url
             return self.photo_url
         domain = Site.objects.get_current().domain
-        return 'http://' + domain + settings.MEDIA_URL + 'img/reader/default_profile_photo.png'
+        return 'https://' + domain + settings.MEDIA_URL + 'img/reader/default_profile_photo.png'
         
     def canonical(self, compact=False, include_follows=False, common_follows_with_user=None,
                   include_settings=False, include_following_user=None):
@@ -1498,25 +1503,21 @@ class MSharedStory(mongo.Document):
     @classmethod
     def feed_quota(cls, user_id, feed_id, days=1, quota=1):
         day_ago = datetime.datetime.now()-datetime.timedelta(days=days)
-        shared_count = cls.objects.filter(shared_date__gte=day_ago, story_feed_id=feed_id).count()
+        shared_count = cls.objects.filter(user_id=user_id,
+                                          shared_date__gte=day_ago, 
+                                          story_feed_id=feed_id).count()
 
         return shared_count >= quota
     
     @classmethod
-    def count_potential_spammers(cls, days=1):
-        day_ago = datetime.datetime.now()-datetime.timedelta(days=days)
-        stories = cls.objects.filter(shared_date__gte=day_ago)
-        shared = [{'u': s.user_id, 'f': s.story_feed_id} for s in stories]
-        ddusers = defaultdict(lambda: defaultdict(int))
-        for story in shared:
-            ddusers[story['u']][story['f']] += 1
-
-        users = {}
-        for user_id, feeds in ddusers.items():
-            users[user_id] = dict(feeds)
-
-        pprint(users)
-        return users
+    def count_potential_spammers(cls, days=1, destroy=False):
+        try:
+            guaranteed_spammers = detect_spammers(days=days, destroy=destroy)
+        except NameError:
+            logging.debug(" ---> ~FR~SNMissing ~SBspam.py~SN")
+            guaranteed_spammers = []
+        
+        return guaranteed_spammers
         
     @classmethod
     def get_shared_stories_from_site(cls, feed_id, user_id, story_url, limit=3):
@@ -1978,7 +1979,7 @@ class MSharedStory(mongo.Document):
                 message += " " + self.blurblog_permalink()
         elif include_url:
             if truncate:
-                message = truncate_chars(message, truncate - 14)
+                message = truncate_chars(message, truncate - 24)
             message += " " + self.blurblog_permalink()
         
         return message
@@ -2197,12 +2198,12 @@ class MSharedStory(mongo.Document):
         
         return image_sizes
     
-    def fetch_original_text(self, force=False, request=None):
+    def fetch_original_text(self, force=False, request=None, debug=False):
         original_text_z = self.original_text_z
         feed = Feed.get_by_id(self.story_feed_id)
         
         if not original_text_z or force:
-            ti = TextImporter(self, feed, request=request)
+            ti = TextImporter(self, feed=feed, request=request, debug=False)
             original_text = ti.fetch()
         else:
             logging.user(request, "~FYFetching ~FGoriginal~FY story text, ~SBfound.")
@@ -2276,7 +2277,11 @@ class MSocialServices(mongo.Document):
     @classmethod
     def get_user(cls, user_id):
         try:
-            profile, created = cls.objects.get_or_create(user_id=user_id)
+            profile = cls.objects.get(user_id=user_id)
+            created = False
+        except cls.DoesNotExist:
+            profile = cls.objects.create(user_id=user_id)
+            created = True
         except cls.MultipleObjectsReturned:
             dupes = cls.objects.filter(user_id=user_id)
             logging.debug(" ---> ~FRDeleting dupe social services. %s found." % dupes.count())
@@ -2419,7 +2424,7 @@ class MSocialServices(mongo.Document):
         facebook_friend_ids = [unicode(friend["id"]) for friend in friends["data"]]
         self.facebook_friend_ids = facebook_friend_ids
         self.facebook_refresh_date = datetime.datetime.utcnow()
-        self.facebook_picture_url = "//graph.facebook.com/%s/picture" % self.facebook_uid
+        self.facebook_picture_url = "https://graph.facebook.com/%s/picture" % self.facebook_uid
         self.syncing_facebook = False
         self.save()
         
@@ -2544,14 +2549,17 @@ class MSocialServices(mongo.Document):
         return following
     
     def disconnect_twitter(self):
+        self.syncing_twitter = False
         self.twitter_uid = None
         self.save()
     
     def disconnect_facebook(self):
+        self.syncing_facebook = False
         self.facebook_uid = None
         self.save()
     
     def disconnect_appdotnet(self):
+        self.syncing_appdotnet = False
         self.appdotnet_uid = None
         self.save()
     
@@ -2577,14 +2585,20 @@ class MSocialServices(mongo.Document):
         return profile
     
     @classmethod
-    def sync_all_twitter_photos(cls, days=14):
-        week_ago = datetime.datetime.now() - datetime.timedelta(days=days)
-        shares = MSharedStory.objects.filter(shared_date__gte=week_ago)
-        sharers = sorted(set([s.user_id for s in shares]))
+    def sync_all_twitter_photos(cls, days=14, everybody=False):
+        if everybody:
+            sharers = [ss.user_id for ss in MSocialServices.objects.all().only('user_id')]
+        elif days:
+            week_ago = datetime.datetime.now() - datetime.timedelta(days=days)
+            shares = MSharedStory.objects.filter(shared_date__gte=week_ago)
+            sharers = sorted(set([s.user_id for s in shares]))
         print " ---> %s sharing user_ids" % len(sorted(sharers))
 
         for user_id in sharers:
-            profile = MSocialProfile.objects.get(user_id=user_id)
+            try:
+                profile = MSocialProfile.objects.get(user_id=user_id)
+            except MSocialProfile.DoesNotExist:
+                continue
             if not profile.photo_service == 'twitter': continue
             ss = MSocialServices.objects.get(user_id=user_id)
             try:
@@ -2605,7 +2619,7 @@ class MSocialServices(mongo.Document):
         try:
             api = self.twitter_api()
             me = api.me()
-        except tweepy.TweepError, e:
+        except (tweepy.TweepError, TypeError), e:
             logging.user(user, "~FRException (%s): ~FCsetting to blank profile photo" % e)
             self.twitter_picture_url = None
             self.set_photo("nothing")
@@ -2644,7 +2658,8 @@ class MSocialServices(mongo.Document):
                            message=message,
                            )
         except facebook.GraphAPIError, e:
-            print e
+            logging.debug("---> ~SN~FMFacebook posting error, disconnecting: ~SB~FR%s" % e)
+            self.disconnect_facebook()
             return
             
         return True

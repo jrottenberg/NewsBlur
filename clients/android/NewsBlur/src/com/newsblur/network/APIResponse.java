@@ -1,6 +1,5 @@
 package com.newsblur.network;
 
-import java.io.InputStreamReader;
 import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -25,7 +24,6 @@ import com.newsblur.util.AppConstants;
  */
 public class APIResponse {
 	
-    private Context context;
     private boolean isError;
     private String errorMessage;
 	private String cookie;
@@ -36,12 +34,20 @@ public class APIResponse {
      * info we might need.
      */
     public APIResponse(Context context, URL originalUrl, HttpURLConnection connection) {
+        this(context, originalUrl, connection, HttpStatus.SC_OK);
+    }
+
+    /**
+     * Construct an online response.  Will test the response for errors and extract all the
+     * info we might need.
+     */
+    public APIResponse(Context context, URL originalUrl, HttpURLConnection connection, int expectedReturnCode) {
 
         this.errorMessage = context.getResources().getString(R.string.error_unset_message);
 
         try {
-            if (connection.getResponseCode() != HttpStatus.SC_OK) {
-                Log.e(this.getClass().getName(), "API returned error code " + connection.getResponseCode() + " calling " + originalUrl);
+            if (connection.getResponseCode() != expectedReturnCode) {
+                Log.e(this.getClass().getName(), "API returned error code " + connection.getResponseCode() + " calling " + originalUrl + ". Expected " + expectedReturnCode);
                 this.isError = true;
                 this.errorMessage = context.getResources().getString(R.string.error_http_connection);
                 return;
@@ -75,7 +81,7 @@ public class APIResponse {
             return;
         }
 
-        if (AppConstants.VERBOSE_LOG) {
+        if (AppConstants.VERBOSE_LOG_NET) {
             Log.d(this.getClass().getName(), "received API response: \n" + this.responseBody);
         }
 
@@ -97,6 +103,10 @@ public class APIResponse {
 
     public boolean isError() {
         return this.isError;
+    }
+
+    public String getErrorMessage() {
+        return this.errorMessage;
     }
 
     /**

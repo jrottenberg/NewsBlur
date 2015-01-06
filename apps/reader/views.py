@@ -59,6 +59,10 @@ from utils.ratelimit import ratelimit
 from vendor.timezones.utilities import localtime_for_timezone
 
 
+BANNED_URLS = [
+    "brentozar.com",
+]
+
 @never_cache
 @render_to('reader/dashboard.xhtml')
 def index(request, **kwargs):
@@ -288,6 +292,7 @@ def load_feeds(request):
         'social_profile': social_profile,
         'social_services': social_services,
         'user_profile': user.profile,
+        "is_staff": user.is_staff,
         'folders': json.decode(folders.folders),
         'starred_count': starred_count,
         'starred_counts': starred_counts,
@@ -380,6 +385,7 @@ def load_feeds_flat(request):
         "social_profile": social_profile,
         "social_services": social_services,
         "user": user.username,
+        "is_staff": user.is_staff,
         "user_profile": user.profile,
         "iphone_version": iphone_version,
         "categories": categories,
@@ -590,7 +596,7 @@ def load_single_feed(request, feed_id):
                                                       usersubs=[usersub],
                                                       group_by_feed=False,
                                                       cutoff_date=user.profile.unread_cutoff)
-        story_hashes = [story['story_hash'] for story in stories]
+        story_hashes = [story['story_hash'] for story in stories if story['story_hash']]
         starred_stories = MStarredStory.objects(user_id=user.pk, 
                                                 story_feed_id=feed.pk, 
                                                 story_hash__in=story_hashes)\
@@ -628,6 +634,7 @@ def load_single_feed(request, feed_id):
                 starred_date = localtime_for_timezone(starred_stories[story['story_hash']]['starred_date'],
                                                       user.profile.timezone)
                 story['starred_date'] = format_story_link_date__long(starred_date, now)
+                story['starred_timestamp'] = starred_date.strftime('%s')
                 story['user_tags'] = starred_stories[story['story_hash']]['user_tags']
             if story['story_hash'] in shared_stories:
                 story['shared'] = True
@@ -817,6 +824,7 @@ def load_starred_stories(request):
         story['long_parsed_date']  = format_story_link_date__long(story_date, nowtz)
         starred_date               = localtime_for_timezone(story['starred_date'], user.profile.timezone)
         story['starred_date']      = format_story_link_date__long(starred_date, nowtz)
+        story['starred_timestamp'] = starred_date.strftime('%s')
         story['read_status']       = 1
         story['starred']           = True
         story['intelligence']      = {
@@ -866,6 +874,8 @@ def starred_stories_rss_feed(request, user_id, secret_token, tag_slug):
     
     try:
         tag_counts = MStarredStoryCounts.objects.get(user_id=user_id, slug=tag_slug)
+    except MStarredStoryCounts.MultipleObjectsReturned:
+        tag_counts = MStarredStoryCounts.objects(user_id=user_id, slug=tag_slug).first()
     except MStarredStoryCounts.DoesNotExist:
         raise Http404
     
@@ -887,10 +897,15 @@ def starred_stories_rss_feed(request, user_id, secret_token, tag_slug):
     )
     rss = feedgenerator.Atom1Feed(**data)
 
-    starred_stories = MStarredStory.objects(
-        user_id=user.pk,
-        user_tags__contains=tag_counts.tag
-    ).order_by('-starred_date')[:25]
+    if not tag_counts.tag:
+        starred_stories = MStarredStory.objects(
+            user_id=user.pk
+        ).order_by('-starred_date').limit(25)
+    else:
+        starred_stories = MStarredStory.objects(
+            user_id=user.pk,
+            user_tags__contains=tag_counts.tag
+        ).order_by('-starred_date').limit(25)
     for starred_story in starred_stories:
         story_data = {
             'title': starred_story.story_title,
@@ -978,6 +993,7 @@ def load_read_stories(request):
             starred_date = localtime_for_timezone(starred_stories[story['story_hash']],
                                                   user.profile.timezone)
             story['starred_date'] = format_story_link_date__long(starred_date, now)
+            story['starred_timestamp'] = starred_date.strftime('%s')
         if story['story_hash'] in shared_stories:
             story['shared'] = True
             story['shared_comments'] = strip_tags(shared_stories[story['story_hash']]['comments'])
@@ -1133,6 +1149,7 @@ def load_river_stories__redis(request):
             starred_date = localtime_for_timezone(starred_stories[story['story_hash']]['starred_date'],
                                                   user.profile.timezone)
             story['starred_date'] = format_story_link_date__long(starred_date, now)
+            story['starred_timestamp'] = starred_date.strftime('%s')
             story['user_tags'] = starred_stories[story['story_hash']]['user_tags']
         story['intelligence'] = {
             'feed':   apply_classifier_feeds(classifier_feeds, story['story_feed_id']),
@@ -1453,6 +1470,9 @@ def mark_story_hash_as_unread(request):
     story_hash = request.REQUEST.get('story_hash')
     feed_id, _ = MStory.split_story_hash(story_hash)
     story, _ = MStory.find_story(feed_id, story_hash)
+    if not story:
+        data = dict(code=-1, message="That story has been removed from the feed, no need to mark it unread.")
+        return data        
     message = RUserStory.story_can_be_marked_read_by_user(story, request.user)
     if message:
         data = dict(code=-1, message=message)
@@ -1499,7 +1519,12 @@ def mark_feed_as_read(request):
     for feed_id in feed_ids:
         if 'social:' in feed_id:
             user_id = int(feed_id.replace('social:', ''))
-            sub = MSocialSubscription.objects.get(user_id=request.user.pk, subscription_user_id=user_id)
+            try:
+                sub = MSocialSubscription.objects.get(user_id=request.user.pk, 
+                                                      subscription_user_id=user_id)
+            except MSocialSubscription.DoesNotExist:
+                logging.user(request, "~FRCouldn't find socialsub: %s" % user_id)
+                continue
             if not multiple:
                 sub_user = User.objects.get(pk=sub.subscription_user_id)
                 logging.user(request, "~FMMarking social feed as read: ~SB%s" % (sub_user.username,))
@@ -1560,6 +1585,9 @@ def add_url(request):
     if not url:
         code = -1
         message = 'Enter in the website address or the feed URL.'
+    elif any([(banned_url in url) for banned_url in BANNED_URLS]):
+        code = -1
+        message = "The publisher of this website has banned NewsBlur."
     else:
         if new_folder:
             usf, _ = UserSubscriptionFolders.objects.get_or_create(user=request.user)
@@ -1582,7 +1610,7 @@ def add_url(request):
 def add_folder(request):
     folder = request.POST['folder']
     parent_folder = request.POST.get('parent_folder', '')
-
+    folders = None
     logging.user(request, "~FRAdding Folder: ~SB%s (in %s)" % (folder, parent_folder))
     
     if folder:
@@ -1590,13 +1618,14 @@ def add_folder(request):
         message = ""
         user_sub_folders_object, _ = UserSubscriptionFolders.objects.get_or_create(user=request.user)
         user_sub_folders_object.add_folder(parent_folder, folder)
+        folders = json.decode(user_sub_folders_object.folders)
         r = redis.Redis(connection_pool=settings.REDIS_PUBSUB_POOL)
         r.publish(request.user.username, 'reload:feeds')
     else:
         code = -1
         message = "Gotta write in a folder name."
         
-    return dict(code=code, message=message)
+    return dict(code=code, message=message, folders=folders)
 
 @ajax_login_required
 @json.json_view
@@ -1648,17 +1677,40 @@ def delete_folder(request):
     folder_to_delete = request.POST.get('folder_name') or request.POST.get('folder_to_delete')
     in_folder = request.POST.get('in_folder', None)
     feed_ids_in_folder = [int(f) for f in request.REQUEST.getlist('feed_id') if f]
+
+    request.user.profile.send_opml_export_email(reason="You have deleted an entire folder of feeds, so here's a backup just in case.")
     
     # Works piss poor with duplicate folder titles, if they are both in the same folder.
     # Deletes all, but only in the same folder parent. But nobody should be doing that, right?
     user_sub_folders = get_object_or_404(UserSubscriptionFolders, user=request.user)
     user_sub_folders.delete_folder(folder_to_delete, in_folder, feed_ids_in_folder)
+    folders = json.decode(user_sub_folders.folders)
 
     r = redis.Redis(connection_pool=settings.REDIS_PUBSUB_POOL)
     r.publish(request.user.username, 'reload:feeds')
     
-    return dict(code=1)
+    return dict(code=1, folders=folders)
+
+
+@required_params('feeds_by_folder')
+@ajax_login_required
+@json.json_view
+def delete_feeds_by_folder(request):
+    feeds_by_folder = json.decode(request.POST['feeds_by_folder'])
+
+    request.user.profile.send_opml_export_email(reason="You have deleted a number of feeds at once, so here's a backup just in case.")
     
+    # Works piss poor with duplicate folder titles, if they are both in the same folder.
+    # Deletes all, but only in the same folder parent. But nobody should be doing that, right?
+    user_sub_folders = get_object_or_404(UserSubscriptionFolders, user=request.user)
+    user_sub_folders.delete_feeds_by_folder(feeds_by_folder)
+    folders = json.decode(user_sub_folders.folders)
+
+    r = redis.Redis(connection_pool=settings.REDIS_PUBSUB_POOL)
+    r.publish(request.user.username, 'reload:feeds')
+    
+    return dict(code=1, folders=folders)
+
 @ajax_login_required
 @json.json_view
 def rename_feed(request):
@@ -1695,13 +1747,30 @@ def rename_folder(request):
     
 @ajax_login_required
 @json.json_view
+def move_feed_to_folders(request):
+    feed_id = int(request.POST['feed_id'])
+    in_folders = request.POST.getlist('in_folders', '')
+    to_folders = request.POST.getlist('to_folders', '')
+
+    user_sub_folders = get_object_or_404(UserSubscriptionFolders, user=request.user)
+    user_sub_folders = user_sub_folders.move_feed_to_folders(feed_id, in_folders=in_folders,
+                                                             to_folders=to_folders)
+    
+    r = redis.Redis(connection_pool=settings.REDIS_PUBSUB_POOL)
+    r.publish(request.user.username, 'reload:feeds')
+
+    return dict(code=1, folders=json.decode(user_sub_folders.folders))
+    
+@ajax_login_required
+@json.json_view
 def move_feed_to_folder(request):
     feed_id = int(request.POST['feed_id'])
     in_folder = request.POST.get('in_folder', '')
     to_folder = request.POST.get('to_folder', '')
 
     user_sub_folders = get_object_or_404(UserSubscriptionFolders, user=request.user)
-    user_sub_folders = user_sub_folders.move_feed_to_folder(feed_id, in_folder=in_folder, to_folder=to_folder)
+    user_sub_folders = user_sub_folders.move_feed_to_folder(feed_id, in_folder=in_folder,
+                                                            to_folder=to_folder)
     
     r = redis.Redis(connection_pool=settings.REDIS_PUBSUB_POOL)
     r.publish(request.user.username, 'reload:feeds')
@@ -1717,6 +1786,29 @@ def move_folder_to_folder(request):
     
     user_sub_folders = get_object_or_404(UserSubscriptionFolders, user=request.user)
     user_sub_folders = user_sub_folders.move_folder_to_folder(folder_name, in_folder=in_folder, to_folder=to_folder)
+    
+    r = redis.Redis(connection_pool=settings.REDIS_PUBSUB_POOL)
+    r.publish(request.user.username, 'reload:feeds')
+
+    return dict(code=1, folders=json.decode(user_sub_folders.folders))
+
+@required_params('feeds_by_folder', 'to_folder')
+@ajax_login_required
+@json.json_view
+def move_feeds_by_folder_to_folder(request):
+    feeds_by_folder = json.decode(request.POST['feeds_by_folder'])
+    to_folder = request.POST['to_folder']
+    new_folder = request.POST.get('new_folder', None)
+
+    request.user.profile.send_opml_export_email(reason="You have moved a number of feeds at once, so here's a backup just in case.")
+    
+    user_sub_folders = get_object_or_404(UserSubscriptionFolders, user=request.user)
+
+    if new_folder:
+        user_sub_folders.add_folder(to_folder, new_folder)
+        to_folder = new_folder
+
+    user_sub_folders = user_sub_folders.move_feeds_by_folder_to_folder(feeds_by_folder, to_folder)
     
     r = redis.Redis(connection_pool=settings.REDIS_PUBSUB_POOL)
     r.publish(request.user.username, 'reload:feeds')
@@ -1942,14 +2034,16 @@ def _mark_story_as_starred(request):
     if random.random() < 0.01:
         MStarredStoryCounts.schedule_count_tags_for_user(request.user.pk)
     MStarredStoryCounts.count_for_user(request.user.pk, total_only=True)
-    starred_counts = MStarredStoryCounts.user_counts(request.user.pk)
+    starred_counts, starred_count = MStarredStoryCounts.user_counts(request.user.pk, include_total=True)
+    if not starred_count and len(starred_counts):
+        starred_count = MStarredStory.objects(user_id=request.user.pk).count()    
     
     if created:
         logging.user(request, "~FCStarring: ~SB%s (~FM~SB%s~FC~SN)" % (story.story_title[:32], starred_story.user_tags))        
     else:
         logging.user(request, "~FCUpdating starred:~SN~FC ~SB%s~SN (~FM~SB%s~FC~SN)" % (story.story_title[:32], starred_story.user_tags))
     
-    return {'code': code, 'message': message, 'starred_counts': starred_counts}
+    return {'code': code, 'message': message, 'starred_count': starred_count, 'starred_counts': starred_counts}
     
 @required_params('story_id')
 @ajax_login_required

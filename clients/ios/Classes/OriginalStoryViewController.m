@@ -14,11 +14,14 @@
 #import "MBProgressHUD.h"
 #import "UIBarButtonItem+Image.h"
 #import "NBBarButtonItem.h"
+//#import "SloppySwiper.h"
 
 @implementation OriginalStoryViewController
 
 @synthesize appDelegate;
 @synthesize webView;
+//@synthesize swiper;
+@synthesize progressView;
 
 - (id)initWithNibName:(NSString *)nibNameOrNil bundle:(NSBundle *)nibBundleOrNil {
 
@@ -28,17 +31,29 @@
 }
 
 - (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
     appDelegate.originalStoryViewNavController.navigationBar.hidden = YES;
+//    self.swiper = [[SloppySwiper alloc] initWithNavigationController:self.navigationController];
+//    self.navigationController.delegate = self.swiper;
+
 }
 
 - (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+
+    [self.navigationController.navigationBar addSubview:progressView];
+    [self resetProgressBar];
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
     self.navigationController.navigationBar.alpha = 1;
+    [progressView removeFromSuperview];
 }
 
 - (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+
     if ([self.webView isLoading]) {
         [self.webView stopLoading];
     }
@@ -47,14 +62,25 @@
     if (![appDelegate.navigationController.viewControllers containsObject:self]) {
         [self.webView loadHTMLString:@"" baseURL:nil];
     }
+    
+    self.navigationController.delegate = appDelegate;
 }
 
 - (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)interfaceOrientation {
     return YES;
 }
 
-- (void)viewDidLoad {    
+- (void)resetProgressBar {
+    if (finishedLoading) return;
+    
+    progressView.progressBarView.alpha = 0.0f;
+    [progressView setProgress:0 animated:NO];
+    [progressView setProgress:NJKInitialProgressValue animated:YES];
+}
+
+- (void)viewDidLoad {
 //    self.navigationItem.title = [[appDelegate activeStory] objectForKey:@"story_title"];
+    [super viewDidLoad];
     
     self.view.layer.masksToBounds = NO;
     self.view.layer.shadowRadius = 5;
@@ -98,6 +124,17 @@
                                                 backBarButton
                                                 ];
     
+    progressProxy = [[NJKWebViewProgress alloc] init]; // instance variable
+    webView.delegate = progressProxy;
+    progressProxy.webViewProxyDelegate = self;
+    progressProxy.progressDelegate = self;
+    
+    CGFloat progressBarHeight = 2.f;
+    CGRect navigaitonBarBounds = self.navigationController.navigationBar.bounds;
+    CGRect barFrame = CGRectMake(0, navigaitonBarBounds.size.height - progressBarHeight, navigaitonBarBounds.size.width, progressBarHeight);
+    progressView = [[NJKWebViewProgressView alloc] initWithFrame:barFrame];
+    progressView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin;
+
     if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
         UIPanGestureRecognizer *gesture = [[UIPanGestureRecognizer alloc]
                                            initWithTarget:self action:@selector(handlePanGesture:)];
@@ -201,6 +238,7 @@
 }
 
 - (void)loadInitialStory {
+    finishedLoading = NO;
     [self loadAddress:nil];
     
     titleView.text = [[[appDelegate activeStory] objectForKey:@"story_title"]
@@ -253,6 +291,8 @@
 
 - (void)webViewDidStartLoad:(UIWebView *)aWebView
 {
+    finishedLoading = NO;
+
     [UIApplication sharedApplication].networkActivityIndicatorVisible = YES;
 }
 
@@ -261,16 +301,20 @@
     [MBProgressHUD hideHUDForView:self.webView animated:YES];
     [UIApplication sharedApplication].networkActivityIndicatorVisible = NO;
     [self updateTitle:aWebView];
+    finishedLoading = YES;
 }
 
 - (void)webView:(UIWebView *)webView didFailLoadWithError:(NSError *)error
 {
     [UIApplication sharedApplication].networkActivityIndicatorVisible = NO;
     
+//    if (error.code == 102 && [error.domain isEqual:@"WebKitErrorDomain"]) {    }
+
     // User clicking on another link before the page loads is OK.
     if ([error code] != NSURLErrorCancelled) {
         [self informError:error];   
     }
+    finishedLoading = YES;
 }
 
 - (void)updateTitle:(UIWebView*)aWebView
@@ -286,13 +330,22 @@
     }
     NSString* urlString = activeUrl;
     NSURL* url = [NSURL URLWithString:urlString];
+//    if ([urlString containsString:@"story_images"]) {
+//        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
+//        NSString *storyImagesDirectory = [[paths objectAtIndex:0] stringByAppendingPathComponent:@"story_images"];
+//
+//        urlString = [urlString substringFromIndex:NSMaxRange([urlString
+//                                                              rangeOfString:@"story_images/"])];
+//        NSString *path = [storyImagesDirectory stringByAppendingPathComponent:urlString];
+//        url = [NSURL fileURLWithPath:path];
+//    }
     if (!url.scheme) {
         NSString* modifiedURLString = [NSString stringWithFormat:@"%@", urlString];
         url = [NSURL URLWithString:modifiedURLString];
     }
-    if ([self.webView isLoading]) {
-        [self.webView stopLoading];
-    }
+//    if ([self.webView isLoading]) {
+//        [self.webView stopLoading];
+//    }
     NSURLRequest* request = [NSURLRequest requestWithURL:url];
     [self.webView loadRequest:request];
     titleView.text = @"Loading...";
@@ -324,6 +377,20 @@
 
 - (void)closeOriginalView {
     [appDelegate closeOriginalStory];
+}
+
+-(void)webViewProgress:(NJKWebViewProgress *)webViewProgress updateProgress:(float)progress {
+//    NSLog(@"Progress: %f", progress);
+    [progressView setProgress:progress animated:YES];
+    
+    if (progress == NJKInteractiveProgressValue) {
+        // The web view has finished parsing the document,
+        // but is still loading sub-resources
+    }
+    
+    if (progress == NJKFinalProgressValue) {
+        finishedLoading = YES;
+    }
 }
 
 @end
