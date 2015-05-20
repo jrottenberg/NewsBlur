@@ -2,26 +2,18 @@ package com.newsblur.service;
 
 import android.util.Log;
 
-import com.newsblur.domain.Story;
-import com.newsblur.network.domain.StoriesResponse;
-import com.newsblur.network.domain.UnreadStoryHashesResponse;
 import com.newsblur.util.AppConstants;
-import com.newsblur.util.DefaultFeedView;
-import com.newsblur.util.FeedUtils;
 import com.newsblur.util.ImageCache;
 import com.newsblur.util.PrefsUtils;
 
-import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.List;
-import java.util.Map.Entry;
 import java.util.Set;
 
 public class ImagePrefetchService extends SubService {
 
     private static volatile boolean Running = false;
 
-    private ImageCache imageCache;
+    ImageCache imageCache;
 
     /** URLs of images contained in recently fetched stories that are candidates for prefetch. */
     static Set<String> ImageQueue;
@@ -36,11 +28,15 @@ public class ImagePrefetchService extends SubService {
     protected void exec() {
         if (!PrefsUtils.isImagePrefetchEnabled(parent)) return;
         if (ImageQueue.size() < 1) return;
+        if (!PrefsUtils.isBackgroundNetworkAllowed(parent)) return;
 
         gotWork();
 
         while ((ImageQueue.size() > 0) && PrefsUtils.isImagePrefetchEnabled(parent)) {
             startExpensiveCycle();
+            // on each batch, re-query the DB for images associated with yet-unread stories
+            // this is a bit expensive, but we are running totally async at a really low priority
+            Set<String> unreadImages = parent.dbHelper.getAllStoryImages();
             Set<String> fetchedImages = new HashSet<String>();
             Set<String> batch = new HashSet<String>(AppConstants.IMAGE_PREFETCH_BATCH_SIZE);
             batchloop: for (String url : ImageQueue) {
@@ -50,10 +46,11 @@ public class ImagePrefetchService extends SubService {
             try {
                 for (String url : batch) {
                     if (parent.stopSync()) return;
-                    
-                    if (AppConstants.VERBOSE_LOG) Log.d(this.getClass().getName(), "prefetching image: " + url);
-                    imageCache.cacheImage(url);
-
+                    // dont fetch the image if the associated story was marked read before we got to it
+                    if (unreadImages.contains(url)) {
+                        if (AppConstants.VERBOSE_LOG) Log.d(this.getClass().getName(), "prefetching image: " + url);
+                        imageCache.cacheImage(url);
+                    }
                     fetchedImages.add(url);
                 }
             } finally {
@@ -61,8 +58,7 @@ public class ImagePrefetchService extends SubService {
                 gotWork();
             }
         }
-        // TODO: do this in a cleanup thread
-        imageCache.cleanup();
+        
     }
 
     public void addUrl(String url) {

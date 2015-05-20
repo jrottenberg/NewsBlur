@@ -1,21 +1,12 @@
 package com.newsblur.activity;
 
-import java.util.LinkedHashSet;
-import java.util.List;
-
-import android.content.ContentValues;
-import android.content.Intent;
-import android.database.Cursor;
-import android.os.AsyncTask;
 import android.os.Bundle;
 import android.app.FragmentTransaction;
 import android.util.Log;
 import android.view.Menu;
 import android.view.MenuInflater;
-import android.widget.Toast;
 
 import com.newsblur.R;
-import com.newsblur.database.DatabaseConstants;
 import com.newsblur.fragment.AllStoriesItemListFragment;
 import com.newsblur.fragment.FeedItemListFragment;
 import com.newsblur.fragment.MarkAllReadDialogFragment;
@@ -29,6 +20,7 @@ import com.newsblur.util.PrefsUtils;
 import com.newsblur.util.ReadFilter;
 import com.newsblur.util.StoryOrder;
 import com.newsblur.util.StateFilter;
+import com.newsblur.util.UIUtils;
 
 public class AllStoriesItemsList extends ItemsList implements MarkAllReadDialogListener {
 
@@ -36,7 +28,7 @@ public class AllStoriesItemsList extends ItemsList implements MarkAllReadDialogL
 	protected void onCreate(Bundle bundle) {
 		super.onCreate(bundle);
 
-		setTitle(getResources().getString(R.string.all_stories));
+        UIUtils.setCustomActionBar(this, R.drawable.ak_icon_allstories, getResources().getString(R.string.all_stories));
 
 		itemListFragment = (AllStoriesItemListFragment) fragmentManager.findFragmentByTag(AllStoriesItemListFragment.class.getName());
 		if (itemListFragment == null) {

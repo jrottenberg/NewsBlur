@@ -24,6 +24,7 @@ _.extend(NEWSBLUR.ReaderOrganizer.prototype, {
         this.open_modal();
 
         this.$modal.bind('click', $.rescope(this.handle_click, this));
+        this.$modal.bind('change', $.rescope(this.handle_change, this));
     },
     
     reset_feeds: function() {
@@ -72,6 +73,12 @@ _.extend(NEWSBLUR.ReaderOrganizer.prototype, {
                         $.make('div', { className: 'NB-error-delete NB-error' }),
                         $.make('div', { className: 'NB-modal-submit-button NB-modal-submit-red NB-disabled NB-action-delete' }, 'Delete'),
                         $.make('div', { className: 'NB-loading' })
+                    ])
+                ]),
+                $.make('div', { className: 'NB-organizer-sidebar-jump' }, [
+                    $.make('div', { className: 'NB-organizer-sidebar-title' }, 'Jump to Folder'),
+                    $.make('div', { className: 'NB-organizer-sidebar-container' }, [
+                        this.make_folders()
                     ])
                 ])
             ]),
@@ -163,6 +170,14 @@ _.extend(NEWSBLUR.ReaderOrganizer.prototype, {
         return $feeds;
     },
     
+    make_folders: function() {
+        var $folders = $.make('div', { className: 'NB-organizer-sidebar-folderjump' }, [
+            NEWSBLUR.utils.make_folders()
+        ]);
+        
+        return $folders;
+    },
+    
     // =============
     // = Selecting =
     // =============
@@ -206,10 +221,14 @@ _.extend(NEWSBLUR.ReaderOrganizer.prototype, {
             this.options.inverse_sorting = false;
         }
         this.options.sorting = sorting;
+        var $feedlist = $('.NB-feedchooser', this.$modal);
+        var old_position = $feedlist.scrollTop();
         
         $(".NB-action-"+sorting, this.$modal).addClass('NB-active').siblings().removeClass('NB-active');
 
-        $(".NB-feedlist", this.$modal).replaceWith(this.make_feeds());
+        $(".NB-feedlist", this.$modal).replaceWith(this.make_feeds());        
+        var $feedlist = $('.NB-feedchooser', this.$modal);
+        $feedlist.scrollTop(old_position);
     },
     
     // =============
@@ -282,6 +301,13 @@ _.extend(NEWSBLUR.ReaderOrganizer.prototype, {
         NEWSBLUR.reader.flags['reloading_feeds'] = true;
 
         console.log(["Deleting feeds by folder", highlighted_feeds]);
+        
+        if (this.options.hierarchy == 'flat') {
+            // Ignore folder when flat, which will delte feed out of all folders
+            highlighted_feeds = _.map(highlighted_feeds, function(feed_folder) {
+                return [feed_folder[0], null];
+            });
+        }
         
         NEWSBLUR.assets.delete_feeds_by_folder(highlighted_feeds, function() {
             NEWSBLUR.reader.flags['reloading_feeds'] = false;
@@ -356,6 +382,13 @@ _.extend(NEWSBLUR.ReaderOrganizer.prototype, {
             this.delete_feeds();
         }, this));
     },
+    
+    handle_change: function(elem, e) {
+        $.targetIs(e, { tagSelector: '.NB-folders', childOf: '.NB-organizer-sidebar-folderjump' },
+                   _.bind(function($t, $p) {
+            this.jump_to_folder($t.val());
+        }, this));
+    },
 
     toggle_folder_add: function() {
         var $folder = $(".NB-add-folder", this.$modal);
@@ -370,6 +403,22 @@ _.extend(NEWSBLUR.ReaderOrganizer.prototype, {
             $icon.addClass('NB-active');
             $folder.slideDown(300);
         }
+    },
+    
+    jump_to_folder: function(folder_title) {
+        if (this.options.hierarchy != 'nested') this.toggle_hierarchy('nested');
+        var $feedlist = $('.NB-feedchooser', this.$modal);
+        var $folder_title = $(".folder_title_text", $feedlist).filter(function(i) {
+            console.log(["folder", this, _.string.trim($(this).text()), folder_title]);
+            return _.string.trim($(this).text()) == folder_title;
+        });
+        if ($folder_title.length) $feedlist.scrollTo($folder_title, { 
+            duration: 850,
+            axis: 'y', 
+            easing: 'easeInOutCubic', 
+            offset: -4, 
+            queue: false
+        });
     }
     
 });

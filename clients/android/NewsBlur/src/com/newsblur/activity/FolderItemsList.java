@@ -15,7 +15,6 @@ import android.widget.Toast;
 import android.util.Log;
 
 import com.newsblur.R;
-import com.newsblur.database.DatabaseConstants;
 import com.newsblur.fragment.FolderItemListFragment;
 import com.newsblur.fragment.MarkAllReadDialogFragment;
 import com.newsblur.fragment.MarkAllReadDialogFragment.MarkAllReadDialogListener;
@@ -27,6 +26,7 @@ import com.newsblur.util.PrefsUtils;
 import com.newsblur.util.ReadFilter;
 import com.newsblur.util.StateFilter;
 import com.newsblur.util.StoryOrder;
+import com.newsblur.util.UIUtils;
 
 public class FolderItemsList extends ItemsList implements MarkAllReadDialogListener {
 
@@ -40,7 +40,7 @@ public class FolderItemsList extends ItemsList implements MarkAllReadDialogListe
         // note: onCreate triggers createFeedSet() so it has to wait until we have the folder name
 		super.onCreate(bundle);
 
-		setTitle(folderName);
+        UIUtils.setCustomActionBar(this, R.drawable.g_icn_folder_rss, folderName);
 
 		itemListFragment = (FolderItemListFragment) fragmentManager.findFragmentByTag(FolderItemListFragment.class.getName());
 		if (itemListFragment == null) {
@@ -54,7 +54,7 @@ public class FolderItemsList extends ItemsList implements MarkAllReadDialogListe
 
     @Override
     protected FeedSet createFeedSet() {
-        return FeedSet.folder(this.folderName, FeedUtils.dbHelper.getFeedsForFolder(folderName));
+        return FeedUtils.feedSetFromFolderName(this.folderName);
     }
 
 	@Override

@@ -77,7 +77,7 @@ DEBUG_ASSETS          = DEBUG
 HOMEPAGE_USERNAME     = 'popular'
 ALLOWED_HOSTS         = ['*']
 AUTO_PREMIUM_NEW_USERS = False
-AUTO_ENABLE_NEW_USERS = False
+AUTO_ENABLE_NEW_USERS = True
 PAYPAL_TEST           = False
 
 # ===============
@@ -109,9 +109,9 @@ MIDDLEWARE_CLASSES = (
     'apps.profile.middleware.LastSeenMiddleware',
     'apps.profile.middleware.UserAgentBanMiddleware',
     'subdomains.middleware.SubdomainMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'apps.profile.middleware.SimpsonsMiddleware',
     'apps.profile.middleware.ServerHostnameMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
     'oauth2_provider.middleware.OAuth2TokenMiddleware',
     # 'debug_toolbar.middleware.DebugToolbarMiddleware',
     'apps.profile.middleware.DBProfilerMiddleware',
@@ -126,6 +126,8 @@ AUTHENTICATION_BACKENDS = (
 )
 
 CORS_ORIGIN_ALLOW_ALL = True
+# CORS_ORIGIN_REGEX_WHITELIST = ('^(https?://)?(\w+\.)?newsblur\.com$', )
+CORS_ALLOW_CREDENTIALS = True
 
 OAUTH2_PROVIDER = {
     'SCOPES': {
@@ -171,7 +173,7 @@ LOGGING = {
             'formatter': 'verbose'
         },
         'mail_admins': {
-            'level': 'ERROR',
+            'level': 'CRITICAL',
             'class': 'django.utils.log.AdminEmailHandler',
             'filters': ['require_debug_false'],
             'include_html': True,
@@ -188,12 +190,16 @@ LOGGING = {
             'level': 'DEBUG',
             'propagate': False,
         },
+        'django.security.DisallowedHost': {
+            'handlers': ['null'],
+            'propagate': False,
+        },
         'newsblur': {
             'handlers': ['console', 'log_file'],
             'level': 'DEBUG',
             'propagate': False,
         },
-    'apps': {
+        'apps': {
             'handlers': ['log_file'],
             'level': 'INFO',
             'propagate': True,
@@ -229,7 +235,7 @@ SOUTH_TESTS_MIGRATE     = False
 SESSION_ENGINE          = 'redis_sessions.session'
 TEST_RUNNER             = "utils.testrunner.TestRunner"
 SESSION_COOKIE_NAME     = 'newsblur_sessionid'
-SESSION_COOKIE_AGE      = 60*60*24*365*2 # 2 years
+SESSION_COOKIE_AGE      = 60*60*24*365 # 1 year
 SESSION_COOKIE_DOMAIN   = '.newsblur.com'
 SENTRY_DSN              = 'https://XXXNEWSBLURXXX@app.getsentry.com/99999999'
 
@@ -489,6 +495,9 @@ REDIS_PUBSUB = {
 REDIS_STORY = {
     'host': 'db_redis_story',
 }
+REDIS_SESSIONS = {
+    'host': 'db_redis_sessions',
+}
 
 CELERY_REDIS_DB = 4
 SESSION_REDIS_DB = 5
@@ -509,6 +518,7 @@ FACEBOOK_SECRET = '99999999999999999999999999999999'
 FACEBOOK_NAMESPACE = 'newsblur'
 TWITTER_CONSUMER_KEY = 'ooooooooooooooooooooo'
 TWITTER_CONSUMER_SECRET = 'XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
+YOUTUBE_API_KEY = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
 
 # ===============
 # = AWS Backing =
@@ -578,26 +588,6 @@ else:
     )
 
 # =========
-# = Redis =
-# =========
-
-BROKER_BACKEND = "redis"
-BROKER_URL = "redis://%s:6379/%s" % (REDIS['host'], CELERY_REDIS_DB)
-CELERY_RESULT_BACKEND = BROKER_URL
-SESSION_REDIS_HOST = REDIS['host']
-
-CACHES = {
-    'default': {
-        'BACKEND': 'redis_cache.RedisCache',
-        'LOCATION': '%s:6379' % REDIS['host'],
-        'OPTIONS': {
-            'DB': 6,
-            'PARSER_CLASS': 'redis.connection.HiredisParser'
-        },
-    },
-}
-
-# =========
 # = Mongo =
 # =========
 
@@ -629,11 +619,27 @@ MONGOANALYTICSDB = connect(MONGO_ANALYTICS_DB.pop('name'), **MONGO_ANALYTICS_DB)
 # = Redis =
 # =========
 
+BROKER_BACKEND = "redis"
+BROKER_URL = "redis://%s:6379/%s" % (REDIS['host'], CELERY_REDIS_DB)
+CELERY_RESULT_BACKEND = BROKER_URL
+SESSION_REDIS_HOST = REDIS_SESSIONS['host']
+
+CACHES = {
+    'default': {
+        'BACKEND': 'redis_cache.RedisCache',
+        'LOCATION': '%s:6379' % REDIS['host'],
+        'OPTIONS': {
+            'DB': 6,
+            'PARSER_CLASS': 'redis.connection.HiredisParser'
+        },
+    },
+}
+
 REDIS_POOL                 = redis.ConnectionPool(host=REDIS['host'], port=6379, db=0)
 REDIS_ANALYTICS_POOL       = redis.ConnectionPool(host=REDIS['host'], port=6379, db=2)
 REDIS_STATISTICS_POOL      = redis.ConnectionPool(host=REDIS['host'], port=6379, db=3)
 REDIS_FEED_POOL            = redis.ConnectionPool(host=REDIS['host'], port=6379, db=4)
-REDIS_SESSION_POOL         = redis.ConnectionPool(host=REDIS['host'], port=6379, db=5)
+REDIS_SESSION_POOL         = redis.ConnectionPool(host=SESSION_REDIS_HOST, port=6379, db=5)
 # REDIS_CACHE_POOL         = redis.ConnectionPool(host=REDIS['host'], port=6379, db=6) # Duped in CACHES
 REDIS_PUBSUB_POOL          = redis.ConnectionPool(host=REDIS_PUBSUB['host'], port=6379, db=0)
 REDIS_STORY_HASH_POOL      = redis.ConnectionPool(host=REDIS_STORY['host'], port=6379, db=1)

@@ -54,14 +54,10 @@ public abstract class ItemsList extends NbActivity implements StateChangedListen
 		currentState = (StateFilter) getIntent().getSerializableExtra(EXTRA_STATE);
         this.fs = createFeedSet();
 
-		requestWindowFeature(Window.FEATURE_PROGRESS);
-		requestWindowFeature(Window.FEATURE_INDETERMINATE_PROGRESS);
         getWindow().setBackgroundDrawableResource(android.R.color.transparent);
 
 		setContentView(R.layout.activity_itemslist);
 		fragmentManager = getFragmentManager();
-
-		getActionBar().setDisplayHomeAsUpEnabled(true);
 
         this.overlayStatusText = (TextView) findViewById(R.id.itemlist_sync_status);
 	}
@@ -79,6 +75,12 @@ public abstract class ItemsList extends NbActivity implements StateChangedListen
         // Reading activities almost certainly changed the read/unread state of some stories. Ensure
         // we reflect those changes promptly.
         itemListFragment.hasUpdated();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        NBSyncService.addRecountCandidates(fs);
     }
 
 	public void markItemListAsRead() {
@@ -132,11 +134,13 @@ public abstract class ItemsList extends NbActivity implements StateChangedListen
     }
 
     private void updateStatusIndicators() {
-        boolean isLoading = NBSyncService.isFeedSetSyncing(this.fs);
-        setProgressBarIndeterminateVisibility(isLoading);
+        boolean isLoading = NBSyncService.isFeedSetSyncing(this.fs, this);
+        if (itemListFragment != null) {
+            itemListFragment.setLoading(isLoading);
+        }
 
         if (overlayStatusText != null) {
-            String syncStatus = NBSyncService.getSyncStatusMessage();
+            String syncStatus = NBSyncService.getSyncStatusMessage(this, true);
             if (syncStatus != null)  {
                 overlayStatusText.setText(syncStatus);
                 overlayStatusText.setVisibility(View.VISIBLE);

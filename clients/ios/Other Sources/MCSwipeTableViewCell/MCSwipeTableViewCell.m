@@ -146,7 +146,7 @@ secondStateIconName:(NSString *)secondIconName
     _isDragging = NO;
     
     // Before reuse we need to reset it's state
-    _shouldDrag = YES;
+//    _shouldDrag = YES;
     _shouldAnimatesIcons = NO;
     _mode = MCSwipeTableViewCellModeNone;
     _modeForState1 = MCSwipeTableViewCellModeNone;
@@ -158,7 +158,10 @@ secondStateIconName:(NSString *)secondIconName
 #pragma mark - Handle Gestures
 
 - (void)handlePanGestureRecognizer:(UIPanGestureRecognizer *)gesture {
+    NSUserDefaults *prefs = [NSUserDefaults standardUserDefaults];
     
+    _shouldDrag = [prefs boolForKey:@"enable_feed_cell_swipe"];
+
     // The user do not want you to be dragged!
     if (!_shouldDrag) return;
     
@@ -221,7 +224,7 @@ secondStateIconName:(NSString *)secondIconName
         UIPanGestureRecognizer *g = (UIPanGestureRecognizer *)gestureRecognizer;
         CGPoint point = [g velocityInView:self];
         
-        if (fabsf(point.x) > fabsf(point.y) ) {
+        if (fabs(point.x) > fabs(point.y) ) {
             
             // We notify the delegate that we just started dragging
             if ([_delegate respondsToSelector:@selector(swipeTableViewCellDidStartSwiping:)]) {
@@ -294,7 +297,7 @@ secondStateIconName:(NSString *)secondIconName
     if (percentage >= 0 && percentage < kMCStop1)
         alpha = percentage / kMCStop1;
     else if (percentage < 0 && percentage > -kMCStop1)
-        alpha = fabsf(percentage / kMCStop1);
+        alpha = fabs(percentage / kMCStop1);
     else alpha = 1.0;
     
     return alpha;

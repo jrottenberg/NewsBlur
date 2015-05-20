@@ -343,6 +343,7 @@ def load_social_page(request, user_id, username=None, **kwargs):
     feed_id = kwargs.get('feed_id') or request.REQUEST.get('feed_id')
     if page: 
         offset = limit * (page-1)
+    social_services = None
     user_social_profile = None
     user_social_services = None
     user_following_social_profile = None
@@ -442,6 +443,7 @@ def load_social_page(request, user_id, username=None, **kwargs):
         story_id = re.sub(r"^/story/.*?/(.*?)/?", "", path)
         if not story_id or '/story' in story_id:
             story_id = path.replace('/story/', '')
+        social_services = MSocialServices.get_user(social_user.pk)
 
         active_story_db = MSharedStory.objects.filter(user_id=social_user.pk,
                                                       story_guid_hash=story_id).limit(1)
@@ -476,6 +478,7 @@ def load_social_page(request, user_id, username=None, **kwargs):
         'facebook_app_id': settings.FACEBOOK_APP_ID,
         'active_story'  : active_story,
         'current_tab'   : current_tab,
+        'social_services': social_services,
     }
 
     logging.user(request, "~FYLoading ~FMsocial ~SBpage~SN~FY: ~SB%s%s" % (
@@ -543,7 +546,7 @@ def mark_story_as_shared(request):
             'message': 'Could not find the original story and no copies could be found.'
         })
     
-    if not request.user.profile.is_premium and MSharedStory.feed_quota(request.user.pk, feed_id):
+    if not request.user.profile.is_premium and MSharedStory.feed_quota(request.user.pk, feed_id, story.story_hash):
         return json.json_response(request, {
             'code': -1, 
             'message': 'Only premium users can share multiple stories per day from the same site.'

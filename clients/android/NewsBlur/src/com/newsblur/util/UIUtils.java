@@ -5,17 +5,29 @@ import static android.graphics.Color.WHITE;
 import static android.graphics.PorterDuff.Mode.DST_IN;
 
 import android.app.Activity;
+import android.app.ActionBar;
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.TypedArray;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.PorterDuffXfermode;
 import android.graphics.RectF;
+import android.graphics.drawable.BitmapDrawable;
+import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Handler;
+import android.view.LayoutInflater;
 import android.view.View;
+import android.view.View.OnClickListener;
+import android.view.ViewGroup.LayoutParams;
+import android.widget.ImageView;
+import android.widget.TextView;
 import android.widget.Toast;
+
+import com.newsblur.R;
+import com.newsblur.activity.NewsBlurApplication;
 
 public class UIUtils {
 	
@@ -73,6 +85,47 @@ public class UIUtils {
         } else {
             v.setVisibility(View.VISIBLE);
         }
+    }
+
+    /**
+     * Set up our customised ActionBar view that features the specified icon and title, sized
+     * away from system standard to meet the NewsBlur visual style.
+     */
+    public static void setCustomActionBar(Activity activity, String imageUrl, String title) { 
+        ImageView iconView = setupCustomActionbar(activity, title);
+        ((NewsBlurApplication) activity.getApplicationContext()).getImageLoader().displayImage(imageUrl, iconView, false);
+    }
+
+    public static void setCustomActionBar(Activity activity, int imageId, String title) { 
+        ImageView iconView = setupCustomActionbar(activity, title);
+        iconView.setImageResource(imageId);
+    }
+
+    private static ImageView setupCustomActionbar(final Activity activity, String title) {
+        // we completely replace the existing title and 'home' icon with a custom view
+        activity.getActionBar().setDisplayShowCustomEnabled(true);
+        activity.getActionBar().setDisplayShowTitleEnabled(false);
+        activity.getActionBar().setDisplayShowHomeEnabled(false);
+        View v = LayoutInflater.from(activity).inflate(R.layout.actionbar_custom_icon, null);
+        TextView titleView = ((TextView) v.findViewById(R.id.actionbar_text));
+        titleView.setText(title);
+        ImageView iconView = ((ImageView) v.findViewById(R.id.actionbar_icon));
+        // using a custom view breaks the system-standard ability to tap the icon or title to return
+        // to the previous activity. Re-implement that here.
+        titleView.setOnClickListener(new OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                activity.finish();
+            }
+        });
+        iconView.setOnClickListener(new OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                activity.finish();
+            }
+        });
+        activity.getActionBar().setCustomView(v, new ActionBar.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.FILL_PARENT));
+        return iconView;
     }
 
     /**

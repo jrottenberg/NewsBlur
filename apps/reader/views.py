@@ -522,6 +522,7 @@ def load_single_feed(request, feed_id):
     read_filter             = request.REQUEST.get('read_filter', 'all')
     query                   = request.REQUEST.get('query')
     include_story_content   = is_true(request.REQUEST.get('include_story_content', True))
+    include_hidden          = is_true(request.REQUEST.get('include_hidden', False))
     message                 = None
     user_search             = None
     
@@ -650,7 +651,8 @@ def load_single_feed(request, feed_id):
             'tags': apply_classifier_tags(classifier_tags, story),
             'title': apply_classifier_titles(classifier_titles, story),
         }
-    
+        story['score'] = UserSubscription.score_story(story['intelligence'])
+        
     # Intelligence
     feed_tags = json.decode(feed.data.popular_tags) if feed.data.popular_tags else []
     feed_authors = json.decode(feed.data.popular_authors) if feed.data.popular_authors else []
@@ -658,8 +660,8 @@ def load_single_feed(request, feed_id):
     if usersub:
         usersub.feed_opens += 1
         usersub.needs_unread_recalc = True
-        usersub.save()
-        
+        usersub.save(update_fields=['feed_opens', 'needs_unread_recalc'])
+    
     diff1 = checkpoint1-start
     diff2 = checkpoint2-start
     diff3 = checkpoint3-start
@@ -674,6 +676,16 @@ def load_single_feed(request, feed_id):
     search_log = "~SN~FG(~SB%s~SN) " % query if query else ""
     logging.user(request, "~FYLoading feed: ~SB%s%s (%s/%s) %s%s" % (
         feed.feed_title[:22], ('~SN/p%s' % page) if page > 1 else '', order, read_filter, search_log, time_breakdown))
+
+    if not include_hidden:
+        hidden_stories_removed = 0
+        new_stories = []
+        for story in stories:
+            if story['score'] >= 0:
+                new_stories.append(story)
+            else:
+                hidden_stories_removed += 1
+        stories = new_stories
     
     data = dict(stories=stories, 
                 user_profiles=user_profiles,
@@ -686,15 +698,16 @@ def load_single_feed(request, feed_id):
                 elapsed_time=round(float(timediff), 2),
                 message=message)
     
+    if not include_hidden: data['hidden_stories_removed'] = hidden_stories_removed
     if dupe_feed_id: data['dupe_feed_id'] = dupe_feed_id
     if not usersub:
         data.update(feed.canonical())
     # if not usersub and feed.num_subscribers <= 1:
     #     data = dict(code=-1, message="You must be subscribed to this feed.")
     
-    # if page <= 1:
+    # if page <= 3:
     #     import random
-    #     time.sleep(random.randint(0, 3))
+    #     time.sleep(random.randint(2, 4))
     
     # if page == 2:
     #     assert False
@@ -1023,6 +1036,7 @@ def load_river_stories__redis(request):
     order             = request.REQUEST.get('order', 'newest')
     read_filter       = request.REQUEST.get('read_filter', 'unread')
     query             = request.REQUEST.get('query')
+    include_hidden    = is_true(request.REQUEST.get('include_hidden', False))
     now               = localtime_for_timezone(datetime.datetime.now(), user.profile.timezone)
     usersubs          = []
     code              = 1
@@ -1157,6 +1171,8 @@ def load_river_stories__redis(request):
             'tags':   apply_classifier_tags(classifier_tags, story),
             'title':  apply_classifier_titles(classifier_titles, story),
         }
+        story['score'] = UserSubscription.score_story(story['intelligence'])
+        
     
     if not user.profile.is_premium:
         message = "The full River of News is a premium feature."
@@ -1171,17 +1187,33 @@ def load_river_stories__redis(request):
                                "stories, ~SN%s/%s/%s feeds, %s/%s)" % 
                                (page, len(stories), len(mstories), len(found_feed_ids), 
                                len(feed_ids), len(original_feed_ids), order, read_filter))
+
+
+    if not include_hidden:
+        hidden_stories_removed = 0
+        new_stories = []
+        for story in stories:
+            if story['score'] >= 0:
+                new_stories.append(story)
+            else:
+                hidden_stories_removed += 1
+        stories = new_stories
+    
     # if page <= 1:
     #     import random
     #     time.sleep(random.randint(0, 6))
     
-    return dict(code=code,
+    data = dict(code=code,
                 message=message,
                 stories=stories,
                 classifiers=classifiers, 
                 elapsed_time=timediff, 
                 user_search=user_search, 
                 user_profiles=user_profiles)
+                
+    if not include_hidden: data['hidden_stories_removed'] = hidden_stories_removed
+    
+    return data
     
 
 @json.json_view
@@ -1326,7 +1358,7 @@ def mark_story_hashes_as_read(request):
             usersub = usersubs[0]
             if not usersub.needs_unread_recalc:
                 usersub.needs_unread_recalc = True
-                usersub.save()
+                usersub.save(update_fields=['needs_unread_recalc'])
             r.publish(request.user.username, 'feed:%s' % feed_id)
     
     hash_count = len(story_hashes)
@@ -1429,7 +1461,7 @@ def mark_story_as_unread(request):
         
     if usersub and not usersub.needs_unread_recalc:
         usersub.needs_unread_recalc = True
-        usersub.save()
+        usersub.save(update_fields=['needs_unread_recalc'])
         
     data = dict(code=0, payload=dict(story_id=story_id))
     
@@ -1484,7 +1516,7 @@ def mark_story_hash_as_unread(request):
         usersub = usersubs[0]
         if not usersub.needs_unread_recalc:
             usersub.needs_unread_recalc = True
-            usersub.save()
+            usersub.save(update_fields=['needs_unread_recalc'])
         data = usersub.invert_read_stories_after_unread_story(story, request)
         r.publish(request.user.username, 'feed:%s' % feed_id)
 
@@ -1559,7 +1591,10 @@ def mark_feed_as_read(request):
     if multiple:
         logging.user(request, "~FMMarking ~SB%s~SN feeds as read" % len(feed_ids))
         r.publish(request.user.username, 'refresh:%s' % ','.join(feed_ids))
-        
+    
+    if errors:
+        logging.user(request, "~FMMarking read had errors: ~FR%s" % errors)
+    
     return dict(code=code, errors=errors, cutoff_date=cutoff_date, direction=direction)
 
 def _parse_user_info(user):

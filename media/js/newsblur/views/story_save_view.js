@@ -110,7 +110,7 @@ NEWSBLUR.Views.StorySaveView = Backbone.View.extend({
             
             if (options.animate_scroll) {
                 var $scroll_container = NEWSBLUR.reader.$s.$story_titles;
-                if (_.contains(['split', 'full'], NEWSBLUR.assets.preference('story_layout'))) {
+                if (_.contains(['split', 'full'], NEWSBLUR.assets.view_setting(NEWSBLUR.reader.active_feed, 'layout'))) {
                     $scroll_container = this.model.latest_story_detail_view.$el.parent();
                 }
                 $scroll_container.stop().scrollTo(this.$el, {
@@ -184,7 +184,7 @@ NEWSBLUR.Views.StorySaveView = Backbone.View.extend({
             // Sideoptions too big, embiggen left side
             console.log(["Sideoption too big, embiggening", content_height, sideoptions_height, new_sideoptions_height]);
             $story_content.stop(true, true).animate({
-                'height': new_sideoptions_height
+                'min-height': new_sideoptions_height
             }, {
                 'duration': 350,
                 'easing': 'easeInOutQuint',

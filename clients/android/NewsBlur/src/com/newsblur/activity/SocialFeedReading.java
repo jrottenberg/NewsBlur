@@ -1,32 +1,24 @@
 package com.newsblur.activity;
 
-import android.database.Cursor;
-import android.net.Uri;
 import android.os.Bundle;
-import android.content.CursorLoader;
-import android.content.Loader;
 
-import com.newsblur.database.DatabaseConstants;
 import com.newsblur.database.MixedFeedsReadingAdapter;
 import com.newsblur.domain.SocialFeed;
-import com.newsblur.util.FeedUtils;
-import com.newsblur.util.PrefsUtils;
+import com.newsblur.util.UIUtils;
 
 public class SocialFeedReading extends Reading {
 
-    private String userId;
-    private String username;
+    private SocialFeed socialFeed;
 
     @Override
     protected void onCreate(Bundle savedInstanceBundle) {
         super.onCreate(savedInstanceBundle);
 
-        userId = getIntent().getStringExtra(Reading.EXTRA_USERID);
-        username = getIntent().getStringExtra(Reading.EXTRA_USERNAME);
+	    socialFeed = (SocialFeed) getIntent().getSerializableExtra(EXTRA_SOCIAL_FEED);
 
-        setTitle(getIntent().getStringExtra(EXTRA_USERNAME));
+        UIUtils.setCustomActionBar(this, socialFeed.photoUrl, socialFeed.feedTitle);
 
-        readingAdapter = new MixedFeedsReadingAdapter(getFragmentManager(), getContentResolver(), defaultFeedView, userId);
+        readingAdapter = new MixedFeedsReadingAdapter(getFragmentManager(), defaultFeedView, socialFeed.userId);
 
         getLoaderManager().initLoader(0, null, this);
     }

@@ -160,7 +160,7 @@ these after the installation below.
  4. Run the development server. At this point, all dependencies should be installed and no
     additional configuration is needed. If you find that something is not working at this
     point, please email the resulting output to Samuel Clay at 
-    [samuel@newsblur.com](samuel@newsblur.com).
+    [samuel@newsblur.com](mailto:samuel@newsblur.com).
  
         ./manage.py runserver
  
@@ -240,6 +240,19 @@ To populate the statistics graphs on the homepage, use the `collect_stats` manag
 command every few minutes:
 
     ./manage.py collect_stats
+
+### Bootstrapping Search
+
+Once you have an elasticsearch server running, you'll want to bootstrap it with feed and story indexes.
+
+    ./manage.py index_feeds
+    
+Stories will be indexed automatically.
+
+If you need to move search servers and want to just delete everything in the search database, you need to reset the MUserSearch table.
+
+    >>> from apps.search.models import MUserSearch
+    >>> MUserSearch.remove_all()
     
 ### Running unit and integration tests
 

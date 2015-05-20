@@ -163,7 +163,7 @@ class Profile(models.Model):
         if not feed_opens and not feed_count:
             return True
         
-    def activate_premium(self):
+    def activate_premium(self, never_expire=False):
         from apps.profile.tasks import EmailNewPremium
         EmailNewPremium.delay(user_id=self.user.pk)
         
@@ -192,6 +192,10 @@ class Profile(models.Model):
         self.queue_new_feeds()
         self.setup_premium_history()
         
+        if never_expire:
+            self.premium_expire = None
+            self.save()
+        
         logging.user(self.user, "~BY~SK~FW~SBNEW PREMIUM ACCOUNT! WOOHOO!!! ~FR%s subscriptions~SN!" % (subs.count()))
         
         return True
@@ -205,7 +209,8 @@ class Profile(models.Model):
             sub.active = False
             try:
                 sub.save()
-                sub.feed.setup_feed_for_premium_subscribers()
+                # Don't bother recalculating feed's subs, as it will do that on next fetch
+                # sub.feed.setup_feed_for_premium_subscribers()
             except (IntegrityError, Feed.DoesNotExist):
                 pass
         
@@ -244,7 +249,10 @@ class Profile(models.Model):
                 # Make sure this doesn't happen again, so let's use Paypal's email.
                 self.user.email = alt_email
                 self.user.save()
+        seen_txn_ids = set()
         for payment in paypal_payments:
+            if payment.txn_id in seen_txn_ids: continue
+            seen_txn_ids.add(payment.txn_id)
             PaymentHistory.objects.create(user=self.user,
                                           payment_date=payment.payment_date,
                                           payment_amount=payment.payment_gross,
@@ -258,6 +266,7 @@ class Profile(models.Model):
             
             for payment in stripe_payments:
                 created = datetime.datetime.fromtimestamp(payment.created)
+                if payment.status == 'failed': continue
                 PaymentHistory.objects.create(user=self.user,
                                               payment_date=created,
                                               payment_amount=payment.amount / 100.0,
@@ -275,11 +284,15 @@ class Profile(models.Model):
                     oldest_recent_payment_date = payment.payment_date
         
         if oldest_recent_payment_date:
-            self.premium_expire = (oldest_recent_payment_date +
-                                   datetime.timedelta(days=365*recent_payments_count))
-            self.save()
+            new_premium_expire = (oldest_recent_payment_date +
+                                  datetime.timedelta(days=365*recent_payments_count))
+            # Only move premium expire forward, never earlier. Also set expiration if not premium.
+            if ((check_premium and not self.premium_expire) or 
+                (self.premium_expire and new_premium_expire > self.premium_expire)):
+                self.premium_expire = new_premium_expire
+                self.save()
 
-        logging.user(self.user, "~BY~SN~FWFound ~SB%s paypal~SN and ~SB%s stripe~SN payments (~SB%s payments expire: ~SN~FB%s~FW)" % (
+        logging.user(self.user, "~BY~SN~FWFound ~SB~FB%s paypal~FW~SN and ~SB~FC%s stripe~FW~SN payments (~SB%s payments expire: ~SN~FB%s~FW)" % (
                      len(paypal_payments), len(stripe_payments), len(payment_history), self.premium_expire))
 
         if (check_premium and not self.is_premium and
@@ -311,15 +324,25 @@ class Profile(models.Model):
                 'API_SIGNATURE': settings.PAYPAL_API_SIGNATURE,
             }
             paypal = PayPalInterface(**paypal_opts)
-            transaction = PayPalIPN.objects.filter(custom=self.user.username,
-                                                   txn_type='subscr_payment'
-                                                   ).order_by('-payment_date')[0]
-            refund = paypal.refund_transaction(transaction.txn_id)
-            try:
-                refunded = int(float(refund.raw['TOTALREFUNDEDAMOUNT'][0]))
-            except KeyError:
-                refunded = int(transaction.payment_gross)
-            logging.user(self.user, "~FRRefunding paypal payment: $%s" % refunded)
+            transactions = PayPalIPN.objects.filter(custom=self.user.username,
+                                                    txn_type='subscr_payment'
+                                                    ).order_by('-payment_date')
+            if not transactions:
+                transactions = PayPalIPN.objects.filter(payer_email=self.user.email,
+                                                        txn_type='subscr_payment'
+                                                        ).order_by('-payment_date')
+            if transactions:
+                transaction = transactions[0]
+                refund = paypal.refund_transaction(transaction.txn_id)
+                try:
+                    refunded = int(float(refund.raw['TOTALREFUNDEDAMOUNT'][0]))
+                except KeyError:
+                    refunded = int(transaction.payment_gross)
+                logging.user(self.user, "~FRRefunding paypal payment: $%s" % refunded)
+            else:
+                logging.user(self.user, "~FRCouldn't refund paypal payment: not found by username or email")
+                refunded = 0
+                    
         
         return refunded
             
@@ -490,7 +513,7 @@ Feeds: %(feeds)s
 
 Sincerely,
 NewsBlur""" % {'user': self.user.username, 'feeds': subs.count()}
-        mail_admins('New premium account', message, fail_silently=True)
+        # mail_admins('New premium account', message, fail_silently=True)
         
         if not self.user.email or not self.send_emails:
             return
@@ -633,21 +656,26 @@ NewsBlur""" % {'user': self.user.username, 'feeds': subs.count()}
         msg.send(fail_silently=True)
         
         logging.user(self.user, "~BB~FM~SBSending launch social email for user: %s months, %s" % (months_ago, self.user.email))
-        
-    def send_premium_expire_grace_period_email(self, force=False):
-        if not self.user.email:
-            logging.user(self.user, "~FM~SB~FRNot~FM~SN sending premium expire grace for user: %s" % (self.user))
-            return
-
+    
+    def grace_period_email_sent(self, force=False):
         emails_sent = MSentEmail.objects.filter(receiver_user_id=self.user.pk,
                                                 email_type='premium_expire_grace')
         day_ago = datetime.datetime.now() - datetime.timedelta(days=360)
         for email in emails_sent:
             if email.date_sent > day_ago and not force:
                 logging.user(self.user, "~SN~FMNot sending premium expire grace email, already sent before.")
-                return
+                return True
         
-        self.premium_expire = datetime.datetime.now()
+    def send_premium_expire_grace_period_email(self, force=False):
+        if not self.user.email:
+            logging.user(self.user, "~FM~SB~FRNot~FM~SN sending premium expire grace for user: %s" % (self.user))
+            return
+
+        if self.grace_period_email_sent(force=force):
+            return
+            
+        if self.premium_expire < datetime.datetime.now():
+            self.premium_expire = datetime.datetime.now()
         self.save()
         
         delta      = datetime.datetime.now() - self.last_seen_on
@@ -753,17 +781,17 @@ def paypal_payment_history_sync(sender, **kwargs):
     except:
         return {"code": -1, "message": "User doesn't exist."}
 payment_was_successful.connect(paypal_payment_history_sync)
-logging.debug(" ---> ~SN~FBHooking up signal ~SB%s~SN." % payment_was_successful.receivers)
 
 def paypal_payment_was_flagged(sender, **kwargs):
     ipn_obj = sender
     try:
         user = User.objects.get(username__iexact=ipn_obj.custom)
     except User.DoesNotExist:
-        user = User.objects.get(email__iexact=ipn_obj.payer_email)
-    logging.user(user, "~BC~SB~FBPaypal subscription payment flagged")
+        if ipn_obj.payer_email:
+            user = User.objects.get(email__iexact=ipn_obj.payer_email)
     try:
         user.profile.setup_premium_history(check_premium=True)
+        logging.user(user, "~BC~SB~FBPaypal subscription payment flagged")
     except:
         return {"code": -1, "message": "User doesn't exist."}
 payment_was_flagged.connect(paypal_payment_was_flagged)
@@ -876,14 +904,7 @@ class PaymentHistory(models.Model):
     
     @classmethod
     def report(cls, months=24):
-        total = cls.objects.all().aggregate(sum=Sum('payment_amount'))
-        print "Total: $%s" % total['sum']
-        
-        for m in reversed(range(months)):
-            now = datetime.datetime.now()
-            start_date = datetime.datetime(now.year, now.month, 1) - dateutil.relativedelta.relativedelta(months=m)
-            end_time = start_date + datetime.timedelta(days=31)
-            end_date = datetime.datetime(end_time.year, end_time.month, 1) - datetime.timedelta(seconds=1)
+        def _counter(start_date, end_date):
             payments = PaymentHistory.objects.filter(payment_date__gte=start_date, payment_date__lte=end_date)
             payments = payments.aggregate(avg=Avg('payment_amount'), 
                                           sum=Sum('payment_amount'), 
@@ -892,7 +913,31 @@ class PaymentHistory(models.Model):
                 start_date.year, start_date.month, start_date.day,
                 end_date.year, end_date.month, end_date.day,
                 round(payments['avg'], 2), payments['sum'], payments['count'])
+            return payments['sum']
 
+        print "\nMonthly Totals:"
+        month_totals = {}
+        for m in reversed(range(months)):
+            now = datetime.datetime.now()
+            start_date = datetime.datetime(now.year, now.month, 1) - dateutil.relativedelta.relativedelta(months=m)
+            end_time = start_date + datetime.timedelta(days=31)
+            end_date = datetime.datetime(end_time.year, end_time.month, 1) - datetime.timedelta(seconds=1)
+            total = _counter(start_date, end_date)
+            month_totals[start_date.strftime("%Y-%m")] = total
+
+        print "\nYearly Totals:"
+        year_totals = {}
+        years = datetime.datetime.now().year - 2009
+        for y in reversed(range(years)):
+            now = datetime.datetime.now()
+            start_date = datetime.datetime(now.year, 1, 1) - dateutil.relativedelta.relativedelta(years=y)
+            end_time = start_date + datetime.timedelta(days=365)
+            end_date = datetime.datetime(end_time.year, end_time.month, 30) - datetime.timedelta(seconds=1)
+            if end_date > now: end_date = now
+            year_totals[now.year - y] = _counter(start_date, end_date)
+
+        total = cls.objects.all().aggregate(sum=Sum('payment_amount'))
+        print "\nTotal: $%s" % total['sum']
 
 class MRedeemedCode(mongo.Document):
     user_id = mongo.IntField()
@@ -927,7 +972,7 @@ class RNewUserQueue:
         user_id = cls.pop_user()
         try:
             user = User.objects.get(pk=user_id)
-        except user.DoesNotExist:
+        except User.DoesNotExist:
             logging.debug("~FRCan't activate free account, can't find user ~SB%s~SN. ~FB%s still in queue." % (user_id, count-1))
             return
             

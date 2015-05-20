@@ -15,7 +15,7 @@ import android.util.Log;
 import com.newsblur.domain.Classifier;
 import com.newsblur.domain.Comment;
 import com.newsblur.domain.Feed;
-import com.newsblur.domain.FeedResult;
+import com.newsblur.domain.Folder;
 import com.newsblur.domain.Reply;
 import com.newsblur.domain.SocialFeed;
 import com.newsblur.domain.Story;
@@ -32,6 +32,7 @@ import com.newsblur.util.StateFilter;
 import com.newsblur.util.StoryOrder;
 
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -108,11 +109,13 @@ public class BlurDatabaseHelper {
     }
 
     public void cleanupStories(boolean keepOldStories) {
+        // story cleanup happens at a low priority in the background. the goal here is to lock
+        // the DB for as short a time as possible, not absolute efficiency.
         for (String feedId : getAllFeeds()) {
             String q = "DELETE FROM " + DatabaseConstants.STORY_TABLE + 
                        " WHERE " + DatabaseConstants.STORY_ID + " IN " +
                        "( SELECT " + DatabaseConstants.STORY_ID + " FROM " + DatabaseConstants.STORY_TABLE +
-                       " WHERE " + DatabaseConstants.STORY_READ + " = 1" +
+                       " WHERE " + DatabaseConstants.STORY_READ + " = 1" + // don't cleanup unreads
                        " AND " + DatabaseConstants.STORY_FEED_ID + " = " + feedId +
                        " ORDER BY " + DatabaseConstants.STORY_TIMESTAMP + " DESC" +
                        " LIMIT -1 OFFSET " + (keepOldStories ? AppConstants.MAX_READ_STORIES_STORED : 0) +
@@ -136,7 +139,7 @@ public class BlurDatabaseHelper {
     public void cleanupFeedsFolders() {
         synchronized (RW_MUTEX) {dbRW.delete(DatabaseConstants.FEED_TABLE, null, null);}
         synchronized (RW_MUTEX) {dbRW.delete(DatabaseConstants.FOLDER_TABLE, null, null);}
-        synchronized (RW_MUTEX) {dbRW.delete(DatabaseConstants.FEED_FOLDER_MAP_TABLE, null, null);}
+        synchronized (RW_MUTEX) {dbRW.delete(DatabaseConstants.SOCIALFEED_TABLE, null, null);}
     }
 
     public void vacuum() {
@@ -146,7 +149,6 @@ public class BlurDatabaseHelper {
     public void deleteFeed(String feedId) {
         String[] selArgs = new String[] {feedId};
         synchronized (RW_MUTEX) {dbRW.delete(DatabaseConstants.FEED_TABLE, DatabaseConstants.FEED_ID + " = ?", selArgs);}
-        synchronized (RW_MUTEX) {dbRW.delete(DatabaseConstants.FEED_FOLDER_MAP_TABLE, DatabaseConstants.FEED_FOLDER_FEED_ID + " = ?", selArgs);}
         synchronized (RW_MUTEX) {dbRW.delete(DatabaseConstants.STORY_TABLE, DatabaseConstants.STORY_FEED_ID + " = ?", selArgs);}
     }
 
@@ -165,13 +167,11 @@ public class BlurDatabaseHelper {
         }
     }
 
-    public void insertFeedsFolders(List<ContentValues> feedValues,
-                                   List<ContentValues> folderValues,
-                                   List<ContentValues> ffmValues,
+    public void insertFeedsFolders(List<ContentValues> folderValues,
+                                   List<ContentValues> feedValues,
                                    List<ContentValues> socialFeedValues) {
-        bulkInsertValues(DatabaseConstants.FEED_TABLE, feedValues);
         bulkInsertValues(DatabaseConstants.FOLDER_TABLE, folderValues);
-        bulkInsertValues(DatabaseConstants.FEED_FOLDER_MAP_TABLE, ffmValues);
+        bulkInsertValues(DatabaseConstants.FEED_TABLE, feedValues);
         bulkInsertValues(DatabaseConstants.SOCIALFEED_TABLE, socialFeedValues);
     }
 
@@ -207,6 +207,18 @@ public class BlurDatabaseHelper {
         }
         c.close();
         return hashes;
+    }
+
+    public Set<String> getAllStoryImages() {
+        Cursor c = dbRO.query(DatabaseConstants.STORY_TABLE, new String[]{DatabaseConstants.STORY_IMAGE_URLS}, null, null, null, null, null);
+        Set<String> urls = new HashSet<String>(c.getCount());
+        while (c.moveToNext()) {
+            for (String url : TextUtils.split(c.getString(c.getColumnIndexOrThrow(DatabaseConstants.STORY_IMAGE_URLS)), ",")) {
+                urls.add(url);
+            }
+        }
+        c.close();
+        return urls;
     }
 
     public void insertStories(StoriesResponse apiResponse, NBSyncService.ActivationMode actMode, long modeCutoff) {
@@ -323,17 +335,19 @@ public class BlurDatabaseHelper {
         bulkInsertValues(DatabaseConstants.REPLY_TABLE, replyValues);
     }
 
-    public Set<String> getFeedsForFolder(String folderName) {
-        Set<String> feedIds = new HashSet<String>();
-        String q = "SELECT " + DatabaseConstants.FEED_FOLDER_FEED_ID + 
-                   " FROM " + DatabaseConstants.FEED_FOLDER_MAP_TABLE +
-                   " WHERE " + DatabaseConstants.FEED_FOLDER_FOLDER_NAME + " = ?" ;
-        Cursor c = dbRO.rawQuery(q, new String[]{folderName});
-        while (c.moveToNext()) {
-           feedIds.add(c.getString(c.getColumnIndexOrThrow(DatabaseConstants.FEED_FOLDER_FEED_ID)));
-        }
-        c.close();
-        return feedIds;
+    public Folder getFolder(String folderName) {
+        String[] selArgs = new String[] {folderName};
+        String selection = DatabaseConstants.FOLDER_NAME + " = ?";
+        Cursor c = dbRO.query(DatabaseConstants.FOLDER_TABLE, null, selection, selArgs, null, null, null);
+        Folder folder = Folder.fromCursor(c);
+        closeQuietly(c);
+        return folder;
+    }
+
+    public void touchStory(String hash) {
+        ContentValues values = new ContentValues();
+        values.put(DatabaseConstants.STORY_LAST_READ_DATE, (new Date()).getTime());
+        synchronized (RW_MUTEX) {dbRW.update(DatabaseConstants.STORY_TABLE, values, DatabaseConstants.STORY_HASH + " = ?", new String[]{hash});}
     }
 
     public void markStoryHashesRead(List<String> hashes) {
@@ -343,33 +357,25 @@ public class BlurDatabaseHelper {
         }
     }
 
+    /**
+     * Marks a story (un)read but does not adjust counts.
+     */
     public void setStoryReadState(String hash, boolean read) {
-        Cursor c = getStory(hash);
-        if (c.getCount() < 1) {
-            Log.w(this.getClass().getName(), "story removed before finishing mark-read");
-            return;
-        }
-        Story story = Story.fromCursor(c);
-        if (story == null) {
-            Log.w(this.getClass().getName(), "story removed before finishing mark-read");
-            return;
-        }
-        setStoryReadState(story, read);
-        
+        ContentValues values = new ContentValues();
+        values.put(DatabaseConstants.STORY_READ, read);
+        values.put(DatabaseConstants.STORY_READ_THIS_SESSION, read);
+        synchronized (RW_MUTEX) {dbRW.update(DatabaseConstants.STORY_TABLE, values, DatabaseConstants.STORY_HASH + " = ?", new String[]{hash});}
     }
 
     /**
      * Marks a story (un)read and also adjusts unread counts for it.
+     *
+     * @return the set of feed IDs that potentially have counts impacted by the mark.
      */
-    public void setStoryReadState(Story story, boolean read) {
-        // read flag
-        ContentValues values = new ContentValues();
-        values.put(DatabaseConstants.STORY_READ, read);
-        values.put(DatabaseConstants.STORY_READ_THIS_SESSION, read);
-        synchronized (RW_MUTEX) {dbRW.update(DatabaseConstants.STORY_TABLE, values, DatabaseConstants.STORY_HASH + " = ?", new String[]{story.storyHash});}
-        // non-social feed count
-        refreshFeedCounts(FeedSet.singleFeed(story.feedId));
-        // social feed counts
+    public Set<FeedSet> setStoryReadState(Story story, boolean read) {
+        // calculate the impact surface so the caller can re-check counts if needed
+        Set<FeedSet> impactedFeeds = new HashSet<FeedSet>();
+        impactedFeeds.add(FeedSet.singleFeed(story.feedId));
         Set<String> socialIds = new HashSet<String>();
         if (!TextUtils.isEmpty(story.socialUserId)) {
             socialIds.add(story.socialUserId);
@@ -380,10 +386,73 @@ public class BlurDatabaseHelper {
             }
         }
         if (socialIds.size() > 0) {
-            refreshFeedCounts(FeedSet.multipleSocialFeeds(socialIds));
+            impactedFeeds.add(FeedSet.multipleSocialFeeds(socialIds));
         }
+        // check the story's starting state and the desired state and adjust it as an atom so we
+        // know if it truly changed or not
+        synchronized (RW_MUTEX) {
+            dbRW.beginTransaction();
+            try {
+                // get a fresh copy of the story from the DB so we know if it changed
+                Cursor c = dbRW.query(DatabaseConstants.STORY_TABLE, 
+                                      new String[]{DatabaseConstants.STORY_READ}, 
+                                      DatabaseConstants.STORY_HASH + " = ?", 
+                                      new String[]{story.storyHash}, 
+                                      null, null, null);
+                if (c.getCount() < 1) {
+                    Log.w(this.getClass().getName(), "story removed before finishing mark-read");
+                    return impactedFeeds;
+                }
+                c.moveToFirst();
+                boolean origState = (c.getInt(c.getColumnIndexOrThrow(DatabaseConstants.STORY_READ)) > 0);
+                c.close();
+                // if there is nothing to be done, halt
+                if (origState == read) {
+                    dbRW.setTransactionSuccessful();
+                    return impactedFeeds;
+                }
+                // update the story's read state
+                ContentValues values = new ContentValues();
+                values.put(DatabaseConstants.STORY_READ, read);
+                values.put(DatabaseConstants.STORY_READ_THIS_SESSION, read);
+                dbRW.update(DatabaseConstants.STORY_TABLE, values, DatabaseConstants.STORY_HASH + " = ?", new String[]{story.storyHash});
+                // which column to inc/dec depends on story intel
+                String impactedCol;
+                String impactedSocialCol;
+                if (story.intelTotal < 0) {
+                    // negative stories don't affect counts
+                    dbRW.setTransactionSuccessful();
+                    return impactedFeeds;
+                } else if (story.intelTotal == 0 ) {
+                    impactedCol = DatabaseConstants.FEED_NEUTRAL_COUNT;
+                    impactedSocialCol = DatabaseConstants.SOCIAL_FEED_NEUTRAL_COUNT;
+                } else {
+                    impactedCol = DatabaseConstants.FEED_POSITIVE_COUNT;
+                    impactedSocialCol = DatabaseConstants.SOCIAL_FEED_POSITIVE_COUNT;
+                }
+                String operator = (read ? " - 1" : " + 1");
+                StringBuilder q = new StringBuilder("UPDATE " + DatabaseConstants.FEED_TABLE);
+                q.append(" SET ").append(impactedCol).append(" = ").append(impactedCol).append(operator);
+                q.append(" WHERE " + DatabaseConstants.FEED_ID + " = ").append(story.feedId);
+                dbRW.execSQL(q.toString());
+                for (String socialId : socialIds) {
+                    q = new StringBuilder("UPDATE " + DatabaseConstants.SOCIALFEED_TABLE);
+                    q.append(" SET ").append(impactedSocialCol).append(" = ").append(impactedSocialCol).append(operator);
+                    q.append(" WHERE " + DatabaseConstants.SOCIAL_FEED_ID + " = ").append(socialId);
+                    dbRW.execSQL(q.toString());
+                }
+                dbRW.setTransactionSuccessful();
+            } finally {
+                dbRW.endTransaction();
+            }
+        }
+        return impactedFeeds;
     }
 
+    /**
+     * Marks a range of stories in a subset of feeds as read. Does not update unread counts;
+     * the caller must use updateLocalFeedCounts() or the /reader/feed_unread_count API.
+     */
     public void markStoriesRead(FeedSet fs, Long olderThan, Long newerThan) {
         ContentValues values = new ContentValues();
         values.put(DatabaseConstants.STORY_READ, true);
@@ -407,14 +476,75 @@ public class BlurDatabaseHelper {
             throw new IllegalStateException("Asked to mark stories for FeedSet of unknown type.");
         }
         synchronized (RW_MUTEX) {dbRW.update(DatabaseConstants.STORY_TABLE, values, conjoinSelections(feedSelection, rangeSelection), null);}
+    }
 
-        refreshFeedCounts(fs);
+    /**
+     * Get the unread count for the given feedset based on the totals in the feeds table.
+     */
+    public int getUnreadCount(FeedSet fs, StateFilter stateFilter) {
+        if (fs.isAllNormal()) {
+            return getFeedsUnreadCount(stateFilter, null, null);
+        } else if (fs.isAllSocial()) {
+            //return getSocialFeedsUnreadCount(stateFilter, null, null);
+            // even though we can count up and total the unreads in social feeds, the API doesn't vend
+            // unread status for stories viewed when reading All Shared Stories, so force this to 0.
+            return 0;
+        } else if (fs.getMultipleFeeds() != null) { 
+            StringBuilder selection = new StringBuilder(DatabaseConstants.FEED_ID + " IN ( ");
+            selection.append(TextUtils.join(",", fs.getMultipleFeeds())).append(")");
+            return getFeedsUnreadCount(stateFilter, selection.toString(), null);
+        } else if (fs.getMultipleSocialFeeds() != null) {
+            StringBuilder selection = new StringBuilder(DatabaseConstants.SOCIAL_FEED_ID + " IN ( ");
+            selection.append(TextUtils.join(",", fs.getMultipleFeeds())).append(")");
+            return getSocialFeedsUnreadCount(stateFilter, selection.toString(), null);
+        } else if (fs.getSingleFeed() != null) {
+            return getFeedsUnreadCount(stateFilter, DatabaseConstants.FEED_ID + " = ?", new String[]{fs.getSingleFeed()});
+        } else if (fs.getSingleSocialFeed() != null) {
+            return getSocialFeedsUnreadCount(stateFilter, DatabaseConstants.SOCIAL_FEED_ID + " = ?", new String[]{fs.getSingleSocialFeed().getKey()});
+        } else {
+            // all other types of view don't track unreads correctly
+            return 0;
+        }
+    }
+
+    private int getFeedsUnreadCount(StateFilter stateFilter, String selection, String[] selArgs) {
+        int result = 0;
+        Cursor c = dbRO.query(DatabaseConstants.FEED_TABLE, null, selection, selArgs, null, null, null);
+        while (c.moveToNext()) {
+            Feed f = Feed.fromCursor(c);
+            result += f.positiveCount;
+            if ((stateFilter == StateFilter.SOME) || (stateFilter == StateFilter.ALL)) result += f.neutralCount;
+            if (stateFilter == StateFilter.ALL) result += f.negativeCount;
+        }
+        c.close();
+        return result;
+    }
+
+    private int getSocialFeedsUnreadCount(StateFilter stateFilter, String selection, String[] selArgs) {
+        int result = 0;
+        Cursor c = dbRO.query(DatabaseConstants.SOCIALFEED_TABLE, null, selection, selArgs, null, null, null);
+        while (c.moveToNext()) {
+            SocialFeed f = SocialFeed.fromCursor(c);
+            result += f.positiveCount;
+            if ((stateFilter == StateFilter.SOME) || (stateFilter == StateFilter.ALL)) result += f.neutralCount;
+            if (stateFilter == StateFilter.ALL) result += f.negativeCount;
+        }
+        c.close();
+        return result;
+    }
+
+    public void updateFeedCounts(String feedId, ContentValues values) {
+        synchronized (RW_MUTEX) {dbRW.update(DatabaseConstants.FEED_TABLE, values, DatabaseConstants.FEED_ID + " = ?", new String[]{feedId});}
+    }
+
+    public void updateSocialFeedCounts(String feedId, ContentValues values) {
+        synchronized (RW_MUTEX) {dbRW.update(DatabaseConstants.SOCIALFEED_TABLE, values, DatabaseConstants.SOCIAL_FEED_ID + " = ?", new String[]{feedId});}
     }
 
     /**
      * Refreshes the counts in the feeds/socialfeeds tables by counting stories in the story table.
      */
-    public void refreshFeedCounts(FeedSet fs) {
+    public void updateLocalFeedCounts(FeedSet fs) {
         // decompose the FeedSet into a list of single feeds that need to be recounted
         List<String> feedIds = new ArrayList<String>();
         List<String> socialFeedIds = new ArrayList<String>();
@@ -438,23 +568,26 @@ public class BlurDatabaseHelper {
         for (String feedId : feedIds) {
             FeedSet singleFs = FeedSet.singleFeed(feedId);
             ContentValues values = new ContentValues();
-            values.put(DatabaseConstants.FEED_NEGATIVE_COUNT, getUnreadCount(singleFs, StateFilter.NEG));
-            values.put(DatabaseConstants.FEED_NEUTRAL_COUNT, getUnreadCount(singleFs, StateFilter.NEUT));
-            values.put(DatabaseConstants.FEED_POSITIVE_COUNT, getUnreadCount(singleFs, StateFilter.BEST));
+            values.put(DatabaseConstants.FEED_NEGATIVE_COUNT, getLocalUnreadCount(singleFs, StateFilter.NEG));
+            values.put(DatabaseConstants.FEED_NEUTRAL_COUNT, getLocalUnreadCount(singleFs, StateFilter.NEUT));
+            values.put(DatabaseConstants.FEED_POSITIVE_COUNT, getLocalUnreadCount(singleFs, StateFilter.BEST));
             synchronized (RW_MUTEX) {dbRW.update(DatabaseConstants.FEED_TABLE, values, DatabaseConstants.FEED_ID + " = ?", new String[]{feedId});}
         }
 
         for (String socialId : socialFeedIds) {
             FeedSet singleFs = FeedSet.singleSocialFeed(socialId, "");
             ContentValues values = new ContentValues();
-            values.put(DatabaseConstants.SOCIAL_FEED_NEGATIVE_COUNT, getUnreadCount(singleFs, StateFilter.NEG));
-            values.put(DatabaseConstants.SOCIAL_FEED_NEUTRAL_COUNT, getUnreadCount(singleFs, StateFilter.NEUT));
-            values.put(DatabaseConstants.SOCIAL_FEED_POSITIVE_COUNT, getUnreadCount(singleFs, StateFilter.BEST));
+            values.put(DatabaseConstants.SOCIAL_FEED_NEGATIVE_COUNT, getLocalUnreadCount(singleFs, StateFilter.NEG));
+            values.put(DatabaseConstants.SOCIAL_FEED_NEUTRAL_COUNT, getLocalUnreadCount(singleFs, StateFilter.NEUT));
+            values.put(DatabaseConstants.SOCIAL_FEED_POSITIVE_COUNT, getLocalUnreadCount(singleFs, StateFilter.BEST));
             synchronized (RW_MUTEX) {dbRW.update(DatabaseConstants.SOCIALFEED_TABLE, values, DatabaseConstants.SOCIAL_FEED_ID + " = ?", new String[]{socialId});}
         }
     }
 
-    public int getUnreadCount(FeedSet fs, StateFilter stateFilter) {
+    /**
+     * Get the unread count for the given feedset based on local story state.
+     */
+    public int getLocalUnreadCount(FeedSet fs, StateFilter stateFilter) {
         Cursor c = getStoriesCursor(fs, stateFilter, ReadFilter.PURE_UNREAD, null, null);
         int count = c.getCount();
         c.close();
@@ -474,12 +607,6 @@ public class BlurDatabaseHelper {
         synchronized (RW_MUTEX) {dbRW.delete(DatabaseConstants.ACTION_TABLE, DatabaseConstants.ACTION_ID + " = ?", new String[]{actionId});}
     }
 
-    public Cursor getStory(String hash) {
-        String q = "SELECT * FROM " + DatabaseConstants.STORY_TABLE +
-                   " WHERE " + DatabaseConstants.STORY_HASH + " = ?";
-        return dbRO.rawQuery(q, new String[]{hash});
-    }
-
     public void setStoryStarred(String hash, boolean starred) {
         ContentValues values = new ContentValues();
         values.put(DatabaseConstants.STORY_STARRED, starred);
@@ -497,6 +624,22 @@ public class BlurDatabaseHelper {
         } else {
             c.moveToFirst();
             String result = c.getString(c.getColumnIndexOrThrow(DatabaseConstants.STORY_TEXT_STORY_TEXT));
+            c.close();
+            return result;
+        }
+    }
+
+    public String getStoryContent(String hash) {
+        String q = "SELECT " + DatabaseConstants.STORY_CONTENT +
+                   " FROM " + DatabaseConstants.STORY_TABLE +
+                   " WHERE " + DatabaseConstants.STORY_HASH + " = ?";
+        Cursor c = dbRO.rawQuery(q, new String[]{hash});
+        if (c.getCount() < 1) {
+            c.close();
+            return null;
+        } else {
+            c.moveToFirst();
+            String result = c.getString(c.getColumnIndexOrThrow(DatabaseConstants.STORY_CONTENT));
             c.close();
             return result;
         }
@@ -553,14 +696,14 @@ public class BlurDatabaseHelper {
         return query(false, DatabaseConstants.SOCIALFEED_TABLE, null, DatabaseConstants.getBlogSelectionFromState(stateFilter), null, null, null, "UPPER(" + DatabaseConstants.SOCIAL_FEED_TITLE + ") ASC", null, cancellationSignal);
     }
 
-    public Loader<Cursor> getFolderFeedMapLoader() {
+    public Loader<Cursor> getFoldersLoader() {
         return new QueryCursorLoader(context) {
-            protected Cursor createCursor() {return getFolderFeedMapCursor(cancellationSignal);}
+            protected Cursor createCursor() {return getFoldersCursor(cancellationSignal);}
         };
     }
 
-    public Cursor getFolderFeedMapCursor(CancellationSignal cancellationSignal) {
-        return query(false, DatabaseConstants.FEED_FOLDER_MAP_TABLE, null, null, null, null, null, null, null, cancellationSignal);
+    public Cursor getFoldersCursor(CancellationSignal cancellationSignal) {
+        return query(false, DatabaseConstants.FOLDER_TABLE, null, null, null, null, null, null, null, cancellationSignal);
     }
 
     public Loader<Cursor> getFeedsLoader(final StateFilter stateFilter) {
@@ -589,7 +732,7 @@ public class BlurDatabaseHelper {
         };
     }
 
-    public Cursor getStoriesCursor(FeedSet fs, StateFilter stateFilter, CancellationSignal cancellationSignal) {
+    private Cursor getStoriesCursor(FeedSet fs, StateFilter stateFilter, CancellationSignal cancellationSignal) {
         if (fs == null) return null;
         ReadFilter readFilter = PrefsUtils.getReadFilter(context, fs);
         StoryOrder order = PrefsUtils.getStoryOrder(context, fs);
@@ -643,7 +786,17 @@ public class BlurDatabaseHelper {
             q.append(" FROM " + DatabaseConstants.SOCIALFEED_STORY_MAP_TABLE);
             q.append(DatabaseConstants.JOIN_STORIES_ON_SOCIALFEED_MAP);
             q.append(DatabaseConstants.JOIN_FEEDS_ON_STORIES);
+            q.append(DatabaseConstants.JOIN_SOCIAL_FEEDS_ON_SOCIALFEED_MAP);
             DatabaseConstants.appendStorySelectionGroupOrder(q, readFilter, order, stateFilter, DatabaseConstants.STORY_TABLE + "." + DatabaseConstants.STORY_ID);
+            return rawQuery(q.toString(), null, cancellationSignal);
+
+        } else if (fs.isAllRead()) {
+
+            StringBuilder q = new StringBuilder(DatabaseConstants.MULTIFEED_STORIES_QUERY_BASE);
+            q.append(" FROM " + DatabaseConstants.STORY_TABLE);
+            q.append(DatabaseConstants.JOIN_FEEDS_ON_STORIES);
+            q.append(" WHERE (" + DatabaseConstants.STORY_LAST_READ_DATE + " > 0)");
+            q.append(" ORDER BY " + DatabaseConstants.READ_STORY_ORDER);
             return rawQuery(q.toString(), null, cancellationSignal);
 
         } else if (fs.isAllSaved()) {
@@ -656,9 +809,78 @@ public class BlurDatabaseHelper {
             q.append(" ORDER BY " + DatabaseConstants.STARRED_STORY_ORDER);
             return rawQuery(q.toString(), null, cancellationSignal);
 
+        } else if (fs.isGlobalShared()) {
+
+            StringBuilder q = new StringBuilder(DatabaseConstants.MULTIFEED_STORIES_QUERY_BASE);
+            q.append(" FROM " + DatabaseConstants.SOCIALFEED_STORY_MAP_TABLE);
+            q.append(DatabaseConstants.JOIN_STORIES_ON_SOCIALFEED_MAP);
+            q.append(DatabaseConstants.JOIN_FEEDS_ON_STORIES);
+            DatabaseConstants.appendStorySelectionGroupOrder(q, readFilter, order, stateFilter, DatabaseConstants.STORY_TABLE + "." + DatabaseConstants.STORY_ID);
+            return rawQuery(q.toString(), null, cancellationSignal);
         } else {
             throw new IllegalStateException("Asked to get stories for FeedSet of unknown type.");
         }
+    }
+
+    public void clearClassifiersForFeed(String feedId) {
+        String[] selArgs = new String[] {feedId};
+        synchronized (RW_MUTEX) {dbRW.delete(DatabaseConstants.CLASSIFIER_TABLE, DatabaseConstants.CLASSIFIER_ID + " = ?", selArgs);}
+    }
+
+    public void insertClassifier(Classifier classifier) {
+        bulkInsertValues(DatabaseConstants.CLASSIFIER_TABLE, classifier.getContentValues());
+    }
+
+    public Classifier getClassifierForFeed(String feedId) {
+        String[] selArgs = new String[] {feedId};
+        Cursor c = dbRO.query(DatabaseConstants.CLASSIFIER_TABLE, null, DatabaseConstants.CLASSIFIER_ID + " = ?", selArgs, null, null, null);
+        Classifier classifier = Classifier.fromCursor(c);
+        closeQuietly(c);
+        return classifier;
+    }
+
+    public List<Comment> getComments(String storyId) {
+        String[] selArgs = new String[] {storyId};
+        String selection = DatabaseConstants.COMMENT_STORYID + " = ?"; 
+        Cursor c = dbRO.query(DatabaseConstants.COMMENT_TABLE, DatabaseConstants.COMMENT_COLUMNS, selection, selArgs, null, null, null);
+        List<Comment> comments = new ArrayList<Comment>(c.getCount());
+        while (c.moveToNext()) {
+            comments.add(Comment.fromCursor(c));
+        }
+        closeQuietly(c);
+        return comments;
+    }
+
+    public Comment getComment(String storyId, String userId) {
+        String selection = DatabaseConstants.COMMENT_STORYID + " = ? AND " + DatabaseConstants.COMMENT_USERID + " = ?";
+        String[] selArgs = new String[] {storyId, userId};
+        Cursor c = dbRO.query(DatabaseConstants.COMMENT_TABLE, DatabaseConstants.COMMENT_COLUMNS, selection, selArgs, null, null, null);
+        if (c.getCount() < 1) return null;
+        c.moveToFirst();
+        Comment comment = Comment.fromCursor(c);
+        closeQuietly(c);
+        return comment;
+    }
+
+    public UserProfile getUserProfile(String userId) {
+        String[] selArgs = new String[] {userId};
+        String selection = DatabaseConstants.USER_USERID + " = ?";
+        Cursor c = dbRO.query(DatabaseConstants.USER_TABLE, null, selection, selArgs, null, null, null);
+        UserProfile profile = UserProfile.fromCursor(c);
+        closeQuietly(c);
+        return profile;
+    }
+
+    public List<Reply> getCommentReplies(String commentId) {
+        String[] selArgs = new String[] {commentId};
+        String selection = DatabaseConstants.REPLY_COMMENTID+ " = ?";
+        Cursor c = dbRO.query(DatabaseConstants.REPLY_TABLE, DatabaseConstants.REPLY_COLUMNS, selection, selArgs, null, null, DatabaseConstants.REPLY_DATE + " DESC");
+        List<Reply> replies = new ArrayList<Reply>(c.getCount());
+        while (c.moveToNext()) {
+            replies.add(Reply.fromCursor(c));
+        }
+        closeQuietly(c);
+        return replies;
     }
 
     public static void closeQuietly(Cursor c) {

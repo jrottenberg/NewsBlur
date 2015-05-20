@@ -7,6 +7,11 @@ import xml.sax
 import redis
 import random
 import pymongo
+import re
+import requests
+import dateutil.parser
+import isodate
+import urlparse
 from django.conf import settings
 from django.db import IntegrityError
 from django.core.cache import cache
@@ -18,9 +23,13 @@ from apps.push.models import PushSubscription
 from apps.statistics.models import MAnalyticsFetcher
 # from utils import feedparser
 from utils import feedparser
-from utils.story_functions import pre_process_story, strip_tags
+from utils.story_functions import pre_process_story, strip_tags, linkify
 from utils import log as logging
 from utils.feed_functions import timelimit, TimeoutError, utf8encode, cache_bust_url
+from BeautifulSoup import BeautifulSoup
+from django.utils import feedgenerator
+from django.utils.html import linebreaks
+from utils import json_functions as json
 # from utils.feed_functions import mail_feed_error_to_admin
 
 
@@ -85,20 +94,29 @@ class FetchFeed:
             logging.debug(u'   ---> [%-30s] ~FM~BKFeed fetched in real-time with fat ping.' % (
                           self.feed.title[:30]))
             return FEED_OK, self.fpf
+        
+        if 'youtube.com' in address:
+            youtube_feed = self.fetch_youtube(address)
+            if not youtube_feed:
+                logging.debug(u'   ***> [%-30s] ~FRYouTube fetch failed: %s.' % 
+                              (self.feed.title[:30], address))
+                return FEED_ERRHTTP, None
+            self.fpf = feedparser.parse(youtube_feed)
 
-        try:
-            self.fpf = feedparser.parse(address,
-                                        agent=USER_AGENT,
-                                        etag=etag,
-                                        modified=modified)
-        except (TypeError, ValueError, KeyError, EOFError), e:
-            logging.debug(u'   ***> [%-30s] ~FR%s, turning off headers.' % 
-                          (self.feed.title[:30], e))
-            self.fpf = feedparser.parse(address, agent=USER_AGENT)
-        except (TypeError, ValueError, KeyError, EOFError), e:
-            logging.debug(u'   ***> [%-30s] ~FR%s fetch failed: %s.' % 
-                          (self.feed.title[:30], e))
-            return FEED_ERRHTTP, None
+        if not self.fpf:
+            try:
+                self.fpf = feedparser.parse(address,
+                                            agent=USER_AGENT,
+                                            etag=etag,
+                                            modified=modified)
+            except (TypeError, ValueError, KeyError, EOFError), e:
+                logging.debug(u'   ***> [%-30s] ~FR%s, turning off headers.' % 
+                              (self.feed.title[:30], e))
+                self.fpf = feedparser.parse(address, agent=USER_AGENT)
+            except (TypeError, ValueError, KeyError, EOFError), e:
+                logging.debug(u'   ***> [%-30s] ~FR%s fetch failed: %s.' % 
+                              (self.feed.title[:30], e))
+                return FEED_ERRHTTP, None
             
         logging.debug(u'   ---> [%-30s] ~FYFeed fetch in ~FM%.4ss' % (
                       self.feed.title[:30], time.time() - start))
@@ -113,6 +131,127 @@ class FetchFeed:
             identity = current_process._identity[0]
 
         return identity
+    
+    def fetch_youtube(self, address):
+        username = None
+        channel_id = None
+        list_id = None
+        
+        if 'gdata.youtube.com' in address:
+            try:
+                username_groups = re.search('gdata.youtube.com/feeds/\w+/users/(\w+)/', address)
+                if not username_groups:
+                    return
+                username = username_groups.group(1)
+            except IndexError:
+                return
+        elif 'youtube.com/feeds/videos.xml?user=' in address:
+            try:
+                username = urlparse.parse_qs(urlparse.urlparse(address).query)['user'][0]
+            except IndexError:
+                return            
+        elif 'youtube.com/feeds/videos.xml?channel_id=' in address:
+            try:
+                channel_id = urlparse.parse_qs(urlparse.urlparse(address).query)['channel_id'][0]
+            except IndexError:
+                return            
+        elif 'youtube.com/playlist' in address:
+            try:
+                list_id = urlparse.parse_qs(urlparse.urlparse(address).query)['list'][0]
+            except IndexError:
+                return            
+        
+        if channel_id:
+            video_ids_xml = requests.get("https://www.youtube.com/feeds/videos.xml?channel_id=%s" % channel_id)
+            channel_json = requests.get("https://www.googleapis.com/youtube/v3/channels?part=snippet&id=%s&key=%s" %
+                                       (channel_id, settings.YOUTUBE_API_KEY))
+            channel = json.decode(channel_json.content)
+            username = channel['items'][0]['snippet']['title']
+            description = channel['items'][0]['snippet']['description']
+        elif list_id:
+            playlist_json = requests.get("https://www.googleapis.com/youtube/v3/playlists?part=snippet&id=%s&key=%s" %
+                                       (list_id, settings.YOUTUBE_API_KEY))
+            playlist = json.decode(playlist_json.content)
+            username = playlist['items'][0]['snippet']['title']
+            description = playlist['items'][0]['snippet']['description']
+            channel_url = "https://www.youtube.com/playlist?list=%s" % list_id
+        elif username:
+            video_ids_xml = requests.get("https://www.youtube.com/feeds/videos.xml?user=%s" % username)
+            description = "YouTube videos uploaded by %s" % username
+        else:
+            return
+                    
+        if list_id:
+            playlist_json = requests.get("https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=%s&key=%s" %
+                                       (list_id, settings.YOUTUBE_API_KEY))
+            playlist = json.decode(playlist_json.content)
+            video_ids = [video['snippet']['resourceId']['videoId'] for video in playlist['items']]
+        else:    
+            if video_ids_xml.status_code != 200:
+                return
+            video_ids_soup = BeautifulSoup(video_ids_xml.content)
+            channel_url = video_ids_soup.find('author').find('uri').getText()
+            video_ids = []
+            for video_id in video_ids_soup.findAll('yt:videoid'):
+                video_ids.append(video_id.getText())
+        
+        videos_json = requests.get("https://www.googleapis.com/youtube/v3/videos?part=contentDetails%%2Csnippet&id=%s&key=%s" %
+             (','.join(video_ids), settings.YOUTUBE_API_KEY))
+        videos = json.decode(videos_json.content)
+
+        data = {}
+        data['title'] = ("%s's YouTube Videos" % username if 'Uploads' not in username else username)
+        data['link'] = channel_url
+        data['description'] = description
+        data['lastBuildDate'] = datetime.datetime.utcnow()
+        data['generator'] = 'NewsBlur YouTube API v3 Decrapifier - %s' % settings.NEWSBLUR_URL
+        data['docs'] = None
+        data['feed_url'] = address
+        rss = feedgenerator.Atom1Feed(**data)
+
+        for video in videos['items']:
+            thumbnail = video['snippet']['thumbnails'].get('maxres')
+            if not thumbnail:
+                thumbnail = video['snippet']['thumbnails'].get('high')
+            if not thumbnail:
+                thumbnail = video['snippet']['thumbnails'].get('medium')
+            duration_sec = isodate.parse_duration(video['contentDetails']['duration']).seconds
+            if duration_sec >= 3600:
+                hours = (duration_sec / 3600)
+                minutes = (duration_sec - (hours*3600)) / 60
+                seconds = duration_sec - (hours*3600) - (minutes*60)
+                duration = "%s:%s:%s" % (hours, '{0:02d}'.format(minutes), '{0:02d}'.format(seconds))
+            else:
+                minutes = duration_sec / 60
+                seconds = duration_sec - (minutes*60)
+                duration = "%s:%s" % ('{0:02d}'.format(minutes), '{0:02d}'.format(seconds))
+            content = """<div class="NB-youtube-player"><iframe allowfullscreen="true" src="%s"></iframe></div>
+                         <div class="NB-youtube-stats"><small>
+                             <b>From:</b> <a href="%s">%s</a><br />
+                             <b>Duration:</b> %s<br />
+                         </small></div><hr>
+                         <div class="NB-youtube-description">%s</div>
+                         <img src="%s" style="display:none" />""" % (
+                ("https://www.youtube.com/embed/" + video['id']),
+                channel_url, username,
+                duration,
+                linkify(linebreaks(video['snippet']['description'])),
+                thumbnail['url'] if thumbnail else "",
+            )
+
+            link = "http://www.youtube.com/watch?v=%s" % video['id']
+            story_data = {
+                'title': video['snippet']['title'],
+                'link': link,
+                'description': content,
+                'author_name': username,
+                'categories': [],
+                'unique_id': "tag:youtube.com,2008:video:%s" % video['id'],
+                'pubdate': dateutil.parser.parse(video['snippet']['publishedAt']),
+            }
+            rss.add_item(**story_data)
+        
+        return rss.writeString('utf-8')
         
 class ProcessFeed:
     def __init__(self, feed_id, fpf, options):
@@ -223,7 +362,20 @@ class ProcessFeed:
             self.feed.feed_link = self.fpf.feed.get('link') or self.fpf.feed.get('id') or self.feed.feed_link
         
         self.feed = self.feed.save()
-
+        
+        # Determine if stories aren't valid and replace broken guids
+        guids_seen = set()
+        permalinks_seen = set()
+        for entry in self.fpf.entries:
+            guids_seen.add(entry.get('guid'))
+            permalinks_seen.add(Feed.get_permalink(entry))
+        guid_difference = len(guids_seen) != len(self.fpf.entries)
+        single_guid = len(guids_seen) == 1
+        replace_guids = single_guid and guid_difference
+        permalink_difference = len(permalinks_seen) != len(self.fpf.entries)
+        single_permalink = len(permalinks_seen) == 1
+        replace_permalinks = single_permalink and permalink_difference
+        
         # Compare new stories to existing stories, adding and updating
         start_date = datetime.datetime.utcnow()
         story_hashes = []
@@ -232,6 +384,21 @@ class ProcessFeed:
             story = pre_process_story(entry)
             if story.get('published') < start_date:
                 start_date = story.get('published')
+            if replace_guids:
+                if replace_permalinks:
+                    new_story_guid = unicode(story.get('published'))
+                    if self.options['verbose']:
+                        logging.debug(u'   ---> [%-30s] ~FBReplacing guid (%s) with timestamp: %s' % (
+                                      self.feed.title[:30],
+                                      story.get('guid'), new_story_guid))
+                    story['guid'] = new_story_guid
+                else:
+                    new_story_guid = Feed.get_permalink(story)
+                    if self.options['verbose']:
+                        logging.debug(u'   ---> [%-30s] ~FBReplacing guid (%s) with permalink: %s' % (
+                                      self.feed.title[:30],
+                                      story.get('guid'), new_story_guid))
+                    story['guid'] = new_story_guid
             story['story_hash'] = MStory.feed_guid_hash_unsaved(self.feed.pk, story.get('guid'))
             stories.append(story)
             story_hashes.append(story.get('story_hash'))

@@ -4,48 +4,47 @@ import android.content.Context;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 
+import com.squareup.okhttp.OkHttpClient;
+import com.squareup.okhttp.Request;
+import com.squareup.okhttp.Response;
+
+import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.concurrent.TimeUnit;
+
+import okio.BufferedSink;
+import okio.Okio;
 
 public class NetworkUtils {
-	
+
+    private static OkHttpClient httpClient = new OkHttpClient();
+
+    static {
+        // By default OkHttpClient follows redirects (inc HTTP -> HTTPS and HTTPS -> HTTP).
+        httpClient.setConnectTimeout(10, TimeUnit.SECONDS);
+        httpClient.setReadTimeout(30, TimeUnit.SECONDS);
+    }
+
 	public static boolean isOnline(Context context) {
 		ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
 		NetworkInfo netInfo = cm.getActiveNetworkInfo();
 		return (netInfo != null && netInfo.isConnected());
 	}
 
-    public static void loadURL(URL url, OutputStream outputStream) throws IOException {
-        HttpURLConnection conn = null;
+    public static long loadURL(URL url, File file) throws IOException {
+        long bytesRead = 0;
         try {
-            conn = (HttpURLConnection)url.openConnection();
-            conn.setConnectTimeout(10000);
-            conn.setReadTimeout(30000);
-            conn.setInstanceFollowRedirects(true);
-            InputStream inputStream = conn.getInputStream();
-            byte[] b = new byte[1024];
-            int read;
-            while ((read = inputStream.read(b)) != -1) {
-                outputStream.write(b, 0, read);
+            Request.Builder requestBuilder = new Request.Builder().url(url);
+            Response response = httpClient.newCall(requestBuilder.build()).execute();
+            if (response.isSuccessful()) {
+                BufferedSink sink = Okio.buffer(Okio.sink(file));
+                bytesRead = sink.writeAll(response.body().source());
+                sink.close();
             }
         } catch (Throwable t) {
             // a huge number of things could go wrong fetching and storing an image. don't spam logs with them
-        } finally {
-            closeQuietly(conn);
-            outputStream.close();
         }
-
+        return bytesRead;
     }
-
-    public static void closeQuietly(HttpURLConnection conn) {
-        if (conn == null) return;
-        try {
-            conn.disconnect();
-        } catch (Throwable t) {
-        }
-    }
-
 }

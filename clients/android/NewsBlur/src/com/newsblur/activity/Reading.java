@@ -1,11 +1,8 @@
 package com.newsblur.activity;
 
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import java.util.ArrayList;
 import java.util.List;
 
-import android.content.ContentResolver;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
@@ -19,6 +16,7 @@ import android.content.Loader;
 import android.support.v4.view.ViewPager;
 import android.support.v4.view.ViewPager.OnPageChangeListener;
 import android.util.Log;
+import android.view.KeyEvent;
 import android.view.Menu;
 import android.view.MenuInflater;
 import android.view.MenuItem;
@@ -45,15 +43,15 @@ import com.newsblur.util.StoryOrder;
 import com.newsblur.util.StateFilter;
 import com.newsblur.util.UIUtils;
 import com.newsblur.util.ViewUtils;
+import com.newsblur.util.VolumeKeyNavigation;
 import com.newsblur.view.NonfocusScrollview.ScrollChangeListener;
 
 public abstract class Reading extends NbActivity implements OnPageChangeListener, OnSeekBarChangeListener, ScrollChangeListener, LoaderManager.LoaderCallbacks<Cursor> {
 
     public static final String EXTRA_FEEDSET = "feed_set";
 	public static final String EXTRA_FEED = "feed";
+	public static final String EXTRA_SOCIAL_FEED = "social_feed";
 	public static final String EXTRA_POSITION = "feed_position";
-	public static final String EXTRA_USERID = "user_id";
-	public static final String EXTRA_USERNAME = "username";
 	public static final String EXTRA_FOLDERNAME = "foldername";
     public static final String EXTRA_DEFAULT_FEED_VIEW = "default_feed_view";
     private static final String TEXT_SIZE = "textsize";
@@ -66,13 +64,6 @@ public abstract class Reading extends NbActivity implements OnPageChangeListener
 
     /** The minimum screen width (in DP) needed to show all the overlay controls. */
     private static final int OVERLAY_MIN_WIDTH_DP = 355;
-
-    /** The longest time (in seconds) the UI will wait for API pages to load while
-        searching for the next unread story. */
-    private static final long UNREAD_SEARCH_LOAD_WAIT_SECONDS = 30;
-
-    private final Object UNREAD_SEARCH_MUTEX = new Object();
-    private CountDownLatch unreadSearchLatch;
 
 	protected int passedPosition;
 	protected StateFilter currentState;
@@ -89,7 +80,6 @@ public abstract class Reading extends NbActivity implements OnPageChangeListener
     protected Button overlayText, overlaySend;
 	protected FragmentManager fragmentManager;
 	protected ReadingAdapter readingAdapter;
-    protected ContentResolver contentResolver;
     private boolean stopLoading;
     protected FeedSet fs;
 
@@ -99,11 +89,17 @@ public abstract class Reading extends NbActivity implements OnPageChangeListener
     private float overlayRangeTopPx;
     private float overlayRangeBotPx;
 
+    private int lastVScrollPos = 0;
+
+    private boolean unreadSearchActive = false;
+    private boolean unreadSearchStarted = false;
+
     private List<Story> pageHistory;
 
     protected DefaultFeedView defaultFeedView;
+    private VolumeKeyNavigation volumeKeyNavigation;
 
-	@Override
+    @Override
 	protected void onCreate(Bundle savedInstanceBundle) {
 		super.onCreate(savedInstanceBundle);
 
@@ -133,16 +129,13 @@ public abstract class Reading extends NbActivity implements OnPageChangeListener
 		currentState = (StateFilter) getIntent().getSerializableExtra(ItemsList.EXTRA_STATE);
         storyOrder = PrefsUtils.getStoryOrder(this, fs);
         readFilter = PrefsUtils.getReadFilter(this, fs);
+        volumeKeyNavigation = PrefsUtils.getVolumeKeyNavigation(this);
 
         if ((savedInstanceBundle != null) && savedInstanceBundle.containsKey(BUNDLE_SELECTED_FEED_VIEW)) {
             defaultFeedView = (DefaultFeedView)savedInstanceBundle.getSerializable(BUNDLE_SELECTED_FEED_VIEW);
         } else {
             defaultFeedView = (DefaultFeedView) getIntent().getSerializableExtra(EXTRA_DEFAULT_FEED_VIEW);
         }
-
-        getActionBar().setDisplayHomeAsUpEnabled(true);
-
-        contentResolver = getContentResolver();
 
         // this value is expensive to compute but doesn't change during a single runtime
         this.overlayRangeTopPx = (float) UIUtils.convertDPsToPixels(this, OVERLAY_RANGE_TOP_DP);
@@ -183,9 +176,6 @@ public abstract class Reading extends NbActivity implements OnPageChangeListener
     @Override
     protected void onPause() {
         this.stopLoading = true;
-        if (this.unreadSearchLatch != null) {
-            this.unreadSearchLatch.countDown();
-        }
         super.onPause();
     }
 
@@ -219,10 +209,12 @@ public abstract class Reading extends NbActivity implements OnPageChangeListener
                 finish();
             }
 
-            checkStoryCount(pager.getCurrentItem());
-            if (this.unreadSearchLatch != null) {
-                this.unreadSearchLatch.countDown();
+            if (unreadSearchActive) {
+                // if we left this flag high, we were looking for an unread, but didn't find one;
+                // now that we have more stories, look again.
+                nextUnread();
             }
+            checkStoryCount(pager.getCurrentItem());
             updateOverlayNav();
             updateOverlayText();
         }
@@ -253,7 +245,8 @@ public abstract class Reading extends NbActivity implements OnPageChangeListener
      * Query the DB for the current unreadcount for this view.
      */
     private int getUnreadCount() {
-        if (fs.isAllSaved()) return 0; // saved stories doesn't have unreads
+        // saved stories and global shared stories don't have unreads
+        if (fs.isAllSaved() || fs.isGlobalShared()) return 0;
         return FeedUtils.dbHelper.getUnreadCount(fs, currentState);
     }
 
@@ -322,7 +315,7 @@ public abstract class Reading extends NbActivity implements OnPageChangeListener
 
     @Override
 	protected void handleUpdate(boolean freshData) {
-        enableMainProgress(NBSyncService.isFeedSetSyncing(this.fs));
+        enableMainProgress(NBSyncService.isFeedSetSyncing(this.fs, this));
         updateOverlayNav();
         if (freshData) updateCursor();
     }
@@ -376,6 +369,11 @@ public abstract class Reading extends NbActivity implements OnPageChangeListener
 
     @Override
     public void scrollChanged(int hPos, int vPos, int currentWidth, int currentHeight) {
+        // only update overlay alpha every few pixels. modern screens are so dense that it
+        // is way overkill to do it on every pixel
+        if (Math.abs(lastVScrollPos-vPos) < 2) return;
+        lastVScrollPos = vPos;
+
         int scrollMax = currentHeight - contentView.getMeasuredHeight();
         int posFromBot = (scrollMax - vPos);
 
@@ -499,13 +497,6 @@ public abstract class Reading extends NbActivity implements OnPageChangeListener
                 triggerRefresh(position + AppConstants.READING_STORY_PRELOAD);
             }
         }
-        
-        if (stopLoading) {
-            // if we terminated because we are well and truly done, break any search loops and stop progress indication
-            if (this.unreadSearchLatch != null) {
-                this.unreadSearchLatch.countDown();
-            }
-        }
 	}
 
 	protected void enableMainProgress(boolean enabled) {
@@ -589,76 +580,60 @@ public abstract class Reading extends NbActivity implements OnPageChangeListener
     }
 
     /**
-     * Search our set of stories for the next unread one.  This requires some heavy
-     * cooperation with the way stories are automatically loaded in the background
-     * as we walk through the list.
+     * Search our set of stories for the next unread one. 
      */
     private void nextUnread() {
-        synchronized (UNREAD_SEARCH_MUTEX) {
-            int candidate = 0;
-            boolean unreadFound = false;
-            boolean error = false;
-            unreadSearch:while (!unreadFound) {
-                Story story = readingAdapter.getStory(candidate);
+        unreadSearchActive = true;
 
-                if (this.stopLoading) {
-                    // this activity was ended before we finished. just stop.
-                    break unreadSearch;
-                } 
+        // the first time an unread search is triggered, also trigger an activation of unreads, so
+        // we don't search for a story that doesn't exist in the cursor
+        if (!unreadSearchStarted) {
+            FeedUtils.activateAllStories();
+            unreadSearchStarted = true;
+        }
 
-                if (story != null) {
-                    if ((candidate == pager.getCurrentItem()) || (story.read) ) {
-                        candidate++;
-                        continue unreadSearch;
-                    } else {
-                        unreadFound = true;
-                        break unreadSearch;
-                    }
+        int candidate = 0;
+        boolean unreadFound = false;
+        unreadSearch:while (!unreadFound) {
+            Story story = readingAdapter.getStory(candidate);
+            if (this.stopLoading) {
+                // this activity was ended before we finished. just stop.
+                unreadSearchActive = false;
+                return;
+            } 
+            // iterate through the stories in our cursor until we find an unread one
+            if (story != null) {
+                if ((candidate == pager.getCurrentItem()) || (story.read) ) {
+                    candidate++;
+                    continue unreadSearch;
+                } else {
+                    unreadFound = true;
                 }
+            }
+            break unreadSearch;
+        }
 
-                // we didn't find a story, so now we need to get more stories. First, though,
-                // double check that there are even any left
-                if (getUnreadCount() <= 0) {
-                    break unreadSearch;
+        if (unreadFound) {
+            // jump to the story we found
+            final int page = candidate;
+            runOnUiThread(new Runnable() {
+                public void run() {
+                    pager.setCurrentItem(page, true);
                 }
-
-                // if we didn't find a story trigger a check to see if there are any more to search before proceeding
-                this.unreadSearchLatch = new CountDownLatch(1);
+            });
+            // disable the search flag, as we are done
+            unreadSearchActive = false;
+        } else {
+            // We didn't find a story, so we should trigger a check to see if the API can load any more.
+            // First, though, double check that there are even any left, as there may have been a delay
+            // between marking an earlier one and double-checking counts.
+            if (getUnreadCount() <= 0) {
+                unreadSearchActive = false;
+            } else {
+                // trigger a check to see if there are any more to search before proceeding. By leaving the
+                // unreadSearchActive flag high, this method will be called again when a new cursor is loaded
                 this.checkStoryCount(candidate+1);
-                try {
-                    boolean unlatched = this.unreadSearchLatch.await(UNREAD_SEARCH_LOAD_WAIT_SECONDS, TimeUnit.SECONDS);
-                    if (unlatched) {
-                        continue unreadSearch;
-                    } else {
-                        Log.e(this.getClass().getName(), "Timed out waiting for next API page while looking for unreads.");
-                        error = true;
-                        break unreadSearch;
-                    }
-                } catch (InterruptedException ie) {
-                    Log.e(this.getClass().getName(), "Interrupted waiting for next API page while looking for unreads.");
-                    error = true;
-                    break unreadSearch;
-                }
-
             }
-            if (error) {
-                runOnUiThread(new Runnable() {
-                    public void run() {
-                        Toast.makeText(Reading.this, R.string.toast_unread_search_error, Toast.LENGTH_LONG).show();
-                    }
-                });
-                return;
-            }
-            if (unreadFound) {
-                final int page = candidate;
-                runOnUiThread(new Runnable() {
-                    public void run() {
-                        pager.setCurrentItem(page, true);
-                    }
-                });
-                return;
-            }
-            Log.w(this.getClass().getName(), "got neither errors nor unreads nor null response looking for unreads");
         }
     }
 
@@ -705,6 +680,7 @@ public abstract class Reading extends NbActivity implements OnPageChangeListener
     }
 
     public void overlaySend(View v) {
+        if ((readingAdapter == null) || (pager == null)) return;
 		Story story = readingAdapter.getStory(pager.getCurrentItem());
         FeedUtils.shareStory(story, this);
     }
@@ -721,4 +697,37 @@ public abstract class Reading extends NbActivity implements OnPageChangeListener
         return readingAdapter.getExistingItem(pager.getCurrentItem());
     }
 
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (isVolumeKeyNavigationEvent(keyCode)) {
+            processVolumeKeyNavigationEvent(keyCode);
+            return true;
+        } else {
+            return super.onKeyDown(keyCode, event);
+        }
+    }
+
+    private boolean isVolumeKeyNavigationEvent(int keyCode) {
+        return volumeKeyNavigation != VolumeKeyNavigation.OFF &&
+               (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP);
+    }
+
+    private void processVolumeKeyNavigationEvent(int keyCode) {
+        if ((keyCode == KeyEvent.KEYCODE_VOLUME_DOWN && volumeKeyNavigation == VolumeKeyNavigation.DOWN_NEXT) ||
+            (keyCode == KeyEvent.KEYCODE_VOLUME_UP && volumeKeyNavigation == VolumeKeyNavigation.UP_NEXT)) {
+            overlayRight(overlayRight);
+        } else {
+            overlayLeft(overlayLeft);
+        }
+    }
+
+    @Override
+    public boolean onKeyUp(int keyCode, KeyEvent event) {
+        // Required to prevent the default sound playing when the volume key is pressed
+        if (isVolumeKeyNavigationEvent(keyCode)) {
+            return true;
+        } else {
+            return super.onKeyUp(keyCode, event);
+        }
+    }
 }

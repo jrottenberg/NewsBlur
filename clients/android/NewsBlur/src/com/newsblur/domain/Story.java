@@ -60,6 +60,7 @@ public class Story implements Serializable {
 	@SerializedName("story_timestamp")
 	public long timestamp;
 
+    // NOTE: this is parsed and saved to the DB, but is *not* generally un-thawed when stories are fetched back from the DB, due to size
     @SerializedName("story_content")
     public String content;
 
@@ -81,6 +82,8 @@ public class Story implements Serializable {
 	@SerializedName("intelligence")
 	public Intelligence intelligence = new Intelligence();
 
+    public int intelTotal;
+
 	@SerializedName("short_parsed_date")
 	public String shortDate;
 
@@ -90,9 +93,13 @@ public class Story implements Serializable {
     @SerializedName("story_hash")
     public String storyHash;
 
+    // NOTE: this is parsed and saved to the DB, but is *not* generally un-thawed when stories are fetched back from the DB
     @SerializedName("image_urls")
     public String[] imageUrls;
 
+    // not yet vended by the API, but tracked locally and fudged (see SyncService) for remote stories
+    public long lastReadTimestamp = 0L;
+ 
 	public ContentValues getValues() {
 		final ContentValues values = new ContentValues();
 		values.put(DatabaseConstants.STORY_ID, id);
@@ -121,6 +128,8 @@ public class Story implements Serializable {
 		values.put(DatabaseConstants.STORY_STARRED_DATE, starredTimestamp);
 		values.put(DatabaseConstants.STORY_FEED_ID, feedId);
         values.put(DatabaseConstants.STORY_HASH, storyHash);
+        values.put(DatabaseConstants.STORY_IMAGE_URLS, TextUtils.join(",", imageUrls));
+        values.put(DatabaseConstants.STORY_LAST_READ_DATE, lastReadTimestamp);
 		return values;
 	}
 
@@ -130,7 +139,6 @@ public class Story implements Serializable {
 		}
 		Story story = new Story();
 		story.authors = cursor.getString(cursor.getColumnIndex(DatabaseConstants.STORY_AUTHORS));
-		story.content = cursor.getString(cursor.getColumnIndex(DatabaseConstants.STORY_CONTENT));
 		story.shortContent = cursor.getString(cursor.getColumnIndex(DatabaseConstants.STORY_SHORT_CONTENT));
 		story.title = cursor.getString(cursor.getColumnIndex(DatabaseConstants.STORY_TITLE));
 		story.timestamp = cursor.getLong(cursor.getColumnIndex(DatabaseConstants.STORY_TIMESTAMP));
@@ -148,6 +156,7 @@ public class Story implements Serializable {
 		story.intelligence.intelligenceFeed = cursor.getInt(cursor.getColumnIndex(DatabaseConstants.STORY_INTELLIGENCE_FEED));
 		story.intelligence.intelligenceTags = cursor.getInt(cursor.getColumnIndex(DatabaseConstants.STORY_INTELLIGENCE_TAGS));
 		story.intelligence.intelligenceTitle = cursor.getInt(cursor.getColumnIndex(DatabaseConstants.STORY_INTELLIGENCE_TITLE));
+        story.intelTotal = cursor.getInt(cursor.getColumnIndex(DatabaseConstants.SUM_STORY_TOTAL));
 		story.read = cursor.getInt(cursor.getColumnIndex(DatabaseConstants.STORY_READ)) > 0;
 		story.starred = cursor.getInt(cursor.getColumnIndex(DatabaseConstants.STORY_STARRED)) > 0;
 		story.starredTimestamp = cursor.getLong(cursor.getColumnIndex(DatabaseConstants.STORY_STARRED_DATE));
@@ -155,6 +164,7 @@ public class Story implements Serializable {
 		story.feedId = cursor.getString(cursor.getColumnIndex(DatabaseConstants.STORY_FEED_ID));
 		story.id = cursor.getString(cursor.getColumnIndex(DatabaseConstants.STORY_ID));
         story.storyHash = cursor.getString(cursor.getColumnIndex(DatabaseConstants.STORY_HASH));
+        story.lastReadTimestamp = cursor.getLong(cursor.getColumnIndex(DatabaseConstants.STORY_LAST_READ_DATE));
 		return story;
 	}
 

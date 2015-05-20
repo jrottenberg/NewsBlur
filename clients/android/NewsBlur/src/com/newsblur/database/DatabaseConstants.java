@@ -15,8 +15,10 @@ public class DatabaseConstants {
 	private static final String INTEGER = " INTEGER";
 
 	public static final String FOLDER_TABLE = "folders";
-	public static final String FOLDER_ID = BaseColumns._ID;
 	public static final String FOLDER_NAME = "folder_name";
+	public static final String FOLDER_PARENT_NAMES = "folder_parent_names";
+	public static final String FOLDER_CHILDREN_NAMES = "folder_children_names";
+	public static final String FOLDER_FEED_IDS = "folder_feedids";
 
 	public static final String FEED_TABLE = "feeds";
 	public static final String FEED_ID = BaseColumns._ID;
@@ -44,10 +46,6 @@ public class DatabaseConstants {
 	public static final String SOCIAL_FEED_POSITIVE_COUNT = "ps";
 	public static final String SOCIAL_FEED_NEUTRAL_COUNT = "nt";
 	public static final String SOCIAL_FEED_NEGATIVE_COUNT = "ng";
-
-	public static final String FEED_FOLDER_MAP_TABLE = "feed_folder_map";
-	public static final String FEED_FOLDER_FEED_ID = "feed_feed_id";
-	public static final String FEED_FOLDER_FOLDER_NAME = "feed_folder_name";
 
 	public static final String SOCIALFEED_STORY_MAP_TABLE = "socialfeed_story_map";
 	public static final String SOCIALFEED_STORY_USER_ID = "socialfeed_story_user_id";
@@ -98,6 +96,8 @@ public class DatabaseConstants {
 	public static final String STORY_TAGS = "tags";
     public static final String STORY_HASH = "story_hash";
     public static final String STORY_ACTIVE = "active";
+    public static final String STORY_IMAGE_URLS = "image_urls";
+    public static final String STORY_LAST_READ_DATE = "last_read_date";
 
     public static final String STORY_TEXT_TABLE = "storytext";
     public static final String STORY_TEXT_STORY_HASH = "story_hash";
@@ -138,8 +138,10 @@ public class DatabaseConstants {
     public static final String ACTION_INCLUDE_NEWER = "include_newer";
 
 	static final String FOLDER_SQL = "CREATE TABLE " + FOLDER_TABLE + " (" +
-		FOLDER_ID + INTEGER + " PRIMARY KEY AUTOINCREMENT, " +
-		FOLDER_NAME + TEXT + " UNIQUE " +  
+		FOLDER_NAME + TEXT + " PRIMARY KEY, " +  
+        FOLDER_PARENT_NAMES + TEXT + ", " +
+        FOLDER_CHILDREN_NAMES + TEXT + ", " +
+        FOLDER_FEED_IDS + TEXT +
 		")";
 
 	static final String FEED_SQL = "CREATE TABLE " + FEED_TABLE + " (" +
@@ -228,7 +230,9 @@ public class DatabaseConstants {
 		STORY_STARRED + INTEGER + ", " +
 		STORY_STARRED_DATE + INTEGER + ", " +
 		STORY_TITLE + TEXT + ", " +
-        STORY_ACTIVE + INTEGER + " DEFAULT 0" +
+        STORY_ACTIVE + INTEGER + " DEFAULT 0, " +
+        STORY_IMAGE_URLS + TEXT + ", " +
+        STORY_LAST_READ_DATE + INTEGER +
         ")";
 
     static final String STORY_TEXT_SQL = "CREATE TABLE " + STORY_TEXT_TABLE + " (" +
@@ -243,12 +247,6 @@ public class DatabaseConstants {
 		CLASSIFIER_VALUE + TEXT +
 		")";
 
-	static final String FEED_FOLDER_SQL = "CREATE TABLE " + FEED_FOLDER_MAP_TABLE + " (" +
-		FEED_FOLDER_FOLDER_NAME + TEXT + " NOT NULL, " +
-		FEED_FOLDER_FEED_ID + INTEGER + " NOT NULL, " +
-		"PRIMARY KEY (" + FEED_FOLDER_FOLDER_NAME + ", " + FEED_FOLDER_FEED_ID + ") " + 
-		")";
-	
 	static final String SOCIALFEED_STORIES_SQL = "CREATE TABLE " + SOCIALFEED_STORY_MAP_TABLE + " (" +
 		SOCIALFEED_STORY_STORYID  + TEXT + " NOT NULL, " +
 		SOCIALFEED_STORY_USER_ID  + INTEGER + " NOT NULL, " +
@@ -306,10 +304,11 @@ public class DatabaseConstants {
 	private static final String STORY_INTELLIGENCE_NEG = SUM_STORY_TOTAL + " < 0 ";
 
 	public static final String[] STORY_COLUMNS = {
-		STORY_AUTHORS, STORY_COMMENT_COUNT, STORY_CONTENT, STORY_SHORT_CONTENT, STORY_TIMESTAMP, STORY_SHARED_DATE, STORY_SHORTDATE, STORY_LONGDATE,
+		STORY_AUTHORS, STORY_COMMENT_COUNT, STORY_SHORT_CONTENT, STORY_TIMESTAMP, STORY_SHARED_DATE, STORY_SHORTDATE, STORY_LONGDATE,
         STORY_TABLE + "." + STORY_FEED_ID, STORY_TABLE + "." + STORY_ID, STORY_INTELLIGENCE_AUTHORS, STORY_INTELLIGENCE_FEED, STORY_INTELLIGENCE_TAGS,
         STORY_INTELLIGENCE_TITLE, STORY_PERMALINK, STORY_READ, STORY_STARRED, STORY_STARRED_DATE, STORY_SHARE_COUNT, STORY_TAGS, STORY_TITLE,
-        STORY_SOCIAL_USER_ID, STORY_SOURCE_USER_ID, STORY_SHARED_USER_IDS, STORY_FRIEND_USER_IDS, STORY_PUBLIC_USER_IDS, STORY_SUM_TOTAL, STORY_HASH
+        STORY_SOCIAL_USER_ID, STORY_SOURCE_USER_ID, STORY_SHARED_USER_IDS, STORY_FRIEND_USER_IDS, STORY_PUBLIC_USER_IDS, STORY_SUM_TOTAL, STORY_HASH,
+        STORY_LAST_READ_DATE
 	};
 
     public static final String MULTIFEED_STORIES_QUERY_BASE = 
@@ -322,7 +321,11 @@ public class DatabaseConstants {
     public static final String JOIN_STORIES_ON_SOCIALFEED_MAP = 
         " INNER JOIN " + STORY_TABLE + " ON " + STORY_TABLE + "." + STORY_ID + " = " + SOCIALFEED_STORY_MAP_TABLE + "." + SOCIALFEED_STORY_STORYID;
 
+    public static final String JOIN_SOCIAL_FEEDS_ON_SOCIALFEED_MAP =
+        " INNER JOIN " + SOCIALFEED_TABLE + " ON " + SOCIALFEED_TABLE + "." + SOCIAL_FEED_ID + " = " + SOCIALFEED_STORY_MAP_TABLE + "." + SOCIALFEED_STORY_USER_ID;
+
     public static final String STARRED_STORY_ORDER = STORY_STARRED_DATE + " DESC";
+    public static final String READ_STORY_ORDER = STORY_LAST_READ_DATE + " DESC";
 
     /**
      * Appends to the given story query any and all selection statements that are required to satisfy the specified

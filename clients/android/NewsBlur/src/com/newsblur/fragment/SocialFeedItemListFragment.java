@@ -53,12 +53,11 @@ public class SocialFeedItemListFragment extends ItemListFragment {
     }
 
 	@Override
-	public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
+	public void onItemClick_(AdapterView<?> parent, View view, int position, long id) {
         if (getActivity().isFinishing()) return;
 		Intent i = new Intent(getActivity(), SocialFeedReading.class);
         i.putExtra(Reading.EXTRA_FEEDSET, getFeedSet());
-		i.putExtra(Reading.EXTRA_USERID, socialFeed.userId);
-		i.putExtra(Reading.EXTRA_USERNAME, socialFeed.username);
+		i.putExtra(Reading.EXTRA_SOCIAL_FEED, socialFeed);
 		i.putExtra(Reading.EXTRA_POSITION, position);
 		i.putExtra(ItemsList.EXTRA_STATE, currentState);
         i.putExtra(Reading.EXTRA_DEFAULT_FEED_VIEW, defaultFeedView);

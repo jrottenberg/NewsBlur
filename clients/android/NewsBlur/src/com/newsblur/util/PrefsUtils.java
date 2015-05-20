@@ -40,39 +40,30 @@ public class PrefsUtils {
 		edit.commit();
 	}
 
-    /**
-     * Check to see if this is the first launch of the app after an upgrade, in which case
-     * we clear the DB to prevent bugs associated with non-forward-compatibility.
-     * @return true if an upgrade was detected.
-     */
     public static boolean checkForUpgrade(Context context) {
-
         SharedPreferences prefs = context.getSharedPreferences(PrefConstants.PREFERENCES, 0);
-
         String version = getVersion(context);
         if (version == null) {
-            Log.w(PrefsUtils.class.getName(), "could not determine app version");
+            Log.wtf(PrefsUtils.class.getName(), "could not determine app version");
             return false;
         }
         if (AppConstants.VERBOSE_LOG) Log.i(PrefsUtils.class.getName(), "launching version: " + version);
 
         String oldVersion = prefs.getString(AppConstants.LAST_APP_VERSION, null);
         if ( (oldVersion == null) || (!oldVersion.equals(version)) ) {
-            Log.i(PrefsUtils.class.getName(), "detected new version of app, clearing local data");
-            // wipe the local DB
-            FeedUtils.dropAndRecreateTables();
-            // in case this is the first time we have run since moving the cache to the new location,
-            // blow away the old version entirely. This line can be removed some time well after
-            // v61+ is widely deployed
-            FileCache.cleanUpOldCache(context);
-            // store the current version
-            prefs.edit().putString(AppConstants.LAST_APP_VERSION, version).commit();
-            // also make sure we auto-trigger an update, since all data are now gone
-            prefs.edit().putLong(AppConstants.LAST_SYNC_TIME, 0L).commit();
+            Log.i(PrefsUtils.class.getName(), "detected new version of app");
             return true;
         }
         return false;
 
+    }
+
+    public static void updateVersion(Context context) {
+        SharedPreferences prefs = context.getSharedPreferences(PrefConstants.PREFERENCES, 0);
+        // store the current version
+        prefs.edit().putString(AppConstants.LAST_APP_VERSION, getVersion(context)).commit();
+        // also make sure we auto-trigger an update, since all data are now gone
+        prefs.edit().putLong(AppConstants.LAST_SYNC_TIME, 0L).commit();
     }
 
     public static String getVersion(Context context) {
@@ -90,6 +81,7 @@ public class PrefsUtils {
         s.append("%0Aapp version: ").append(getVersion(context));
         s.append("%0Aandroid version: ").append(Build.VERSION.RELEASE);
         s.append("%0Adevice: ").append(Build.MANUFACTURER + "+" + Build.MODEL + "+(" + Build.BOARD + ")");
+        s.append("%0Ausername: ").append(getUserDetails(context).username);
         s.append("%0Amemory: ").append(NBSyncService.isMemoryLow() ? "low" : "normal");
         s.append("%0Aspeed: ").append(NBSyncService.getSpeedInfo());
         s.append("%0Apremium: ");
@@ -100,6 +92,8 @@ public class PrefsUtils {
         } else {
             s.append("unknown");
         }
+        s.append("%0Aprefetch: ").append(isOfflineEnabled(context) ? "yes" : "no");
+        s.append("%0Akeepread: ").append(isKeepOldStories(context) ? "yes" : "no");
         return s.toString();
     }
 
@@ -248,6 +242,17 @@ public class PrefsUtils {
         prefs.edit().putLong(PrefConstants.LAST_VACUUM_TIME, (new Date()).getTime()).commit();
     }
 
+    public static boolean isTimeToCleanup(Context context) {
+        SharedPreferences prefs = context.getSharedPreferences(PrefConstants.PREFERENCES, 0);
+        long lastTime = prefs.getLong(PrefConstants.LAST_CLEANUP_TIME, 1L);
+        return ( (lastTime + AppConstants.CLEANUP_TIME_MILLIS) < (new Date()).getTime() );
+    }
+
+    public static void updateLastCleanupTime(Context context) {
+        SharedPreferences prefs = context.getSharedPreferences(PrefConstants.PREFERENCES, 0);
+        prefs.edit().putLong(PrefConstants.LAST_CLEANUP_TIME, (new Date()).getTime()).commit();
+    }
+
     public static StoryOrder getStoryOrderForFeed(Context context, String feedId) {
         SharedPreferences prefs = context.getSharedPreferences(PrefConstants.PREFERENCES, 0);
         return StoryOrder.valueOf(prefs.getString(PrefConstants.FEED_STORY_ORDER_PREFIX + feedId, getDefaultStoryOrder(prefs).toString()));
@@ -378,8 +383,17 @@ public class PrefsUtils {
             throw new IllegalArgumentException( "requests for multiple social feeds not supported" );
         }
 
+        if (fs.isAllRead()) {
+            // dummy value, not really used
+            return StoryOrder.NEWEST;
+        }
+
         if (fs.isAllSaved()) {
             return getStoryOrderForFolder(context, PrefConstants.SAVED_STORIES_FOLDER_NAME);
+        }
+
+        if (fs.isGlobalShared()) {
+            return StoryOrder.NEWEST;
         }
 
         throw new IllegalArgumentException( "unknown type of feed set" );
@@ -406,8 +420,17 @@ public class PrefsUtils {
             throw new IllegalArgumentException( "requests for multiple social feeds not supported" );
         }
 
+        if (fs.isAllRead()) {
+            // dummy value, not really used
+            return ReadFilter.ALL;
+        }
+
         if (fs.isAllSaved()) {
             return getReadFilterForFolder(context, PrefConstants.SAVED_STORIES_FOLDER_NAME);
+        }
+
+        if (fs.isGlobalShared()) {
+            return ReadFilter.UNREAD;
         }
 
         throw new IllegalArgumentException( "unknown type of feed set" );
@@ -493,5 +516,10 @@ public class PrefsUtils {
         Editor editor = prefs.edit();
         editor.putString(PrefConstants.STATE_FILTER, newValue.toString());
         editor.commit();
+    }
+
+    public static VolumeKeyNavigation getVolumeKeyNavigation(Context context) {
+        SharedPreferences prefs = context.getSharedPreferences(PrefConstants.PREFERENCES, 0);
+        return VolumeKeyNavigation.valueOf(prefs.getString(PrefConstants.VOLUME_KEY_NAVIGATION, VolumeKeyNavigation.OFF.toString()));
     }
 }

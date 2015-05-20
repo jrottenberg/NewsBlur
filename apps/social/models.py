@@ -23,6 +23,7 @@ from apps.analyzer.models import MClassifierFeed, MClassifierAuthor, MClassifier
 from apps.analyzer.models import apply_classifier_titles, apply_classifier_feeds, apply_classifier_authors, apply_classifier_tags
 from apps.rss_feeds.models import Feed, MStory
 from apps.rss_feeds.text_importer import TextImporter
+from apps.rss_feeds.page_importer import PageImporter
 from apps.profile.models import Profile, MSentEmail
 from vendor import facebook
 from vendor import tweepy
@@ -32,6 +33,7 @@ from utils import log as logging
 from utils import json_functions as json
 from utils.feed_functions import relative_timesince, chunks
 from utils.story_functions import truncate_chars, strip_tags, linkify, image_size
+from utils.image_functions import ImageOps
 from utils.scrubber import SelectiveScriptScrubber
 from utils import s3_utils
 from StringIO import StringIO
@@ -1100,8 +1102,21 @@ class MSocialSubscription(mongo.Document):
         rt.expire(unread_ranked_stories_keys, 60*60)
         
         return story_hashes, story_dates, unread_feed_story_hashes
+
+    def mark_newer_stories_read(self, cutoff_date):
+        if (self.unread_count_negative == 0
+            and self.unread_count_neutral == 0
+            and self.unread_count_positive == 0
+            and not self.needs_unread_recalc):
+            return
         
-    def mark_story_ids_as_read(self, story_hashes, feed_id=None, mark_all_read=False, request=None):
+        cutoff_date = cutoff_date - datetime.timedelta(seconds=1)
+        story_hashes = self.get_stories(limit=500, order="newest", cutoff_date=cutoff_date,
+                                        read_filter="unread", hashes_only=True)
+        data = self.mark_story_ids_as_read(story_hashes, aggregated=True)
+        return data
+    
+    def mark_story_ids_as_read(self, story_hashes, feed_id=None, mark_all_read=False, request=None, aggregated=False):
         data = dict(code=0, payload=story_hashes)
         r = redis.Redis(connection_pool=settings.REDIS_POOL)
         
@@ -1131,7 +1146,7 @@ class MSocialSubscription(mongo.Document):
             friends_with_shares = [int(f) for f in r.sinter(share_key, friend_key)]
             
             RUserStory.mark_read(self.user_id, feed_id, story_hash, social_user_ids=friends_with_shares,
-                                 aggregated=mark_all_read)
+                                 aggregated=(mark_all_read or aggregated))
             
             if self.user_id in friends_with_shares:
                 friends_with_shares.remove(self.user_id)
@@ -1394,6 +1409,7 @@ class MSharedStory(mongo.Document):
     story_original_content   = mongo.StringField()
     story_original_content_z = mongo.BinaryField()
     original_text_z          = mongo.BinaryField()
+    original_page_z          = mongo.BinaryField()
     story_content_type       = mongo.StringField(max_length=255)
     story_author_name        = mongo.StringField()
     story_permalink          = mongo.StringField()
@@ -1469,7 +1485,7 @@ class MSharedStory(mongo.Document):
 
         self.shared_date = self.shared_date or datetime.datetime.utcnow()
         self.has_replies = bool(len(self.replies))
-
+        
         super(MSharedStory, self).save(*args, **kwargs)
         
         author = MSocialProfile.get_user(self.user_id)
@@ -1501,11 +1517,12 @@ class MSharedStory(mongo.Document):
         self.delete()
     
     @classmethod
-    def feed_quota(cls, user_id, feed_id, days=1, quota=1):
+    def feed_quota(cls, user_id, feed_id, story_hash, days=1, quota=1):
         day_ago = datetime.datetime.now()-datetime.timedelta(days=days)
         shared_count = cls.objects.filter(user_id=user_id,
                                           shared_date__gte=day_ago, 
-                                          story_feed_id=feed_id).count()
+                                          story_feed_id=feed_id,
+                                          story_hash__nin=[story_hash]).count()
 
         return shared_count >= quota
     
@@ -1990,7 +2007,15 @@ class MSharedStory(mongo.Document):
         if service in self.posted_to_services:
             logging.user(user, "~BM~FRAlready posted to %s." % (service))
             return
-
+        
+        posts_last_hour = MSharedStory.objects.filter(user_id=self.user_id,
+                                                      posted_to_services__contains=service,
+                                                      shared_date__gte=datetime.datetime.now() -
+                                                                       datetime.timedelta(hours=1)).count()
+        if posts_last_hour >= 3:
+            logging.user(user, "~BM~FRPosted to %s > 3 times in past hour" % service)
+            return
+            
         posted = False
         social_service = MSocialServices.objects.get(user_id=self.user_id)
         
@@ -2181,8 +2206,13 @@ class MSharedStory(mongo.Document):
             if any(ignore in image_source for ignore in IGNORE_IMAGE_SOURCES):
                 continue
             req = requests.get(image_source, headers=headers, stream=True)
-            datastream = StringIO(req.content[:30])
-            _, width, height = image_size(datastream)
+            try:
+                datastream = StringIO(req.content)
+                width, height = ImageOps.image_size(datastream)
+            except IOError, e:
+                logging.debug(" ***> Couldn't read image: %s / %s" % (e, image_source))
+                datastream = StringIO(req.content[:100])
+                _, width, height = image_size(datastream)
             if width <= 16 or height <= 16:
                 continue
             image_sizes.append({'src': image_source, 'size': (width, height)})
@@ -2194,7 +2224,8 @@ class MSharedStory(mongo.Document):
         self.image_count = len(image_sizes)
         self.save()
         
-        logging.debug(" ---> ~SN~FGFetched image sizes on shared story: ~SB%s images" % self.image_count)
+        logging.debug(" ---> ~SN~FGFetched image sizes on shared story: ~SB%s/%s images" % 
+                      (self.image_count, len(image_sources)))
         
         return image_sizes
     
@@ -2210,6 +2241,17 @@ class MSharedStory(mongo.Document):
             original_text = zlib.decompress(original_text_z)
         
         return original_text
+
+    def fetch_original_page(self, force=False, request=None, debug=False):
+        if not self.original_page_z or force:
+            feed = Feed.get_by_id(self.story_feed_id)
+            importer = PageImporter(request=request, feed=feed, story=self)
+            original_page = importer.fetch_story()
+        else:
+            logging.user(request, "~FYFetching ~FGoriginal~FY story page, ~SBfound.")
+            original_page = zlib.decompress(self.original_page_z)
+        
+        return original_page
 
 class MSocialServices(mongo.Document):
     user_id               = mongo.IntField()
@@ -2631,6 +2673,7 @@ class MSocialServices(mongo.Document):
         
     def post_to_twitter(self, shared_story):
         message = shared_story.generate_post_to_service_message(truncate=140)
+        shared_story.calculate_image_sizes()
         
         try:
             api = self.twitter_api()

@@ -2,14 +2,12 @@ package com.newsblur.activity;
 
 import android.database.Cursor;
 import android.os.Bundle;
-import android.content.CursorLoader;
 import android.content.Loader;
 
 import com.newsblur.R;
-import com.newsblur.database.DatabaseConstants;
 import com.newsblur.database.MixedFeedsReadingAdapter;
 import com.newsblur.util.FeedUtils;
-import com.newsblur.util.StoryOrder;
+import com.newsblur.util.UIUtils;
 
 public class SavedStoriesReading extends Reading {
 
@@ -17,8 +15,8 @@ public class SavedStoriesReading extends Reading {
     protected void onCreate(Bundle savedInstanceBundle) {
         super.onCreate(savedInstanceBundle);
 
-        setTitle(getResources().getString(R.string.saved_stories_title));
-        readingAdapter = new MixedFeedsReadingAdapter(getFragmentManager(), getContentResolver(), defaultFeedView, null);
+        UIUtils.setCustomActionBar(this, R.drawable.clock, getResources().getString(R.string.saved_stories_title));
+        readingAdapter = new MixedFeedsReadingAdapter(getFragmentManager(), defaultFeedView, null);
 
         getLoaderManager().initLoader(0, null, this);
     }

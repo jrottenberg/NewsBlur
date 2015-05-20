@@ -118,6 +118,7 @@
 @synthesize popoverHasFeedView;
 @synthesize inFeedDetail;
 @synthesize inStoryDetail;
+@synthesize inTextView;
 @synthesize isPresentingActivities;
 @synthesize activeComment;
 @synthesize activeShareType;
@@ -178,7 +179,7 @@
     self.navigationController.delegate = self;
     self.navigationController.viewControllers = [NSArray arrayWithObject:self.feedsViewController];
     self.storiesCollection = [StoriesCollection new];
-
+    
     if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
         [ASIHTTPRequest setDefaultUserAgentString:[NSString stringWithFormat:@"NewsBlur iPad App v%@",
                                                    currentiPhoneVersion]];
@@ -694,6 +695,8 @@
                 _completedString = @"Copied";
             } else if ([activityType isEqualToString:UIActivityTypeAirDrop]) {
                 _completedString = @"Airdropped";
+            } else if ([activityType isEqualToString:@"com.ideashower.ReadItLaterPro.AddToPocketExtension"]) {
+                return;
             } else if ([activityType isEqualToString:@"TUSafariActivity"]) {
                 return;
             } else if ([activityType isEqualToString:@"ARChromeActivity"]) {
@@ -1006,7 +1009,7 @@
 }
 
 - (void)loadFeedDetailView:(BOOL)transition {
-    self.inFeedDetail = YES;    
+    self.inFeedDetail = YES;
     popoverHasFeedView = YES;
 
     [feedDetailViewController resetFeedDetail];
@@ -1462,19 +1465,19 @@
 
 - (void)loadStoryDetailView {
     if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPhone) {
-        UINavigationController *navController = self.navigationController;
-        [navController pushViewController:storyPageControl animated:YES];
-        navController.navigationItem.hidesBackButton = YES;
+        [navigationController pushViewController:storyPageControl animated:YES];
+        navigationController.navigationItem.hidesBackButton = YES;
     }
-    
+
     NSInteger activeStoryLocation = [storiesCollection locationOfActiveStory];
     if (activeStoryLocation >= 0) {
         BOOL animated = (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad &&
                          !self.tryFeedCategory);
+        [self.storyPageControl view];
         [self.storyPageControl changePage:activeStoryLocation animated:animated];
         [self.storyPageControl animateIntoPlace:YES];
     }
-        
+
     [MBProgressHUD hideHUDForView:self.storyPageControl.view animated:YES];
 }
 
@@ -1926,6 +1929,7 @@
 }
 
 - (void)finishMarkAsRead:(NSDictionary *)story {
+    if (!storyPageControl.previousPage || !storyPageControl.currentPage || !storyPageControl.nextPage) return;
     for (StoryDetailViewController *page in @[storyPageControl.previousPage,
                                               storyPageControl.currentPage,
                                               storyPageControl.nextPage]) {
@@ -2054,6 +2058,16 @@
     self.dictSavedStoryTags = savedStoryDict;
     
     return savedStories;
+}
+
+- (void)renameFeed:(NSString *)newTitle {
+    NSMutableDictionary *newActiveFeed = [storiesCollection.activeFeed mutableCopy];
+    [newActiveFeed setObject:newTitle forKey:@"feed_title"];
+    storiesCollection.activeFeed = newActiveFeed;
+}
+
+- (void)renameFolder:(NSString *)newTitle {
+    storiesCollection.activeFolder = newTitle;
 }
 
 #pragma mark -

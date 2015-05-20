@@ -4,9 +4,10 @@ import android.content.Context;
 import android.util.Log;
 
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.net.URL;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -20,6 +21,7 @@ public class ImageCache {
     private static final String CACHE_SUBDIR = "olimages";
     private static final long MAX_FILE_AGE_MILLIS = 30L * 24L * 60L * 60L * 1000L;
     private static final long MIN_FREE_SPACE_BYTES = 100L * 1024L * 1024L;
+    private static final int MIN_VALID_CACHE_BYTES = 64;
 
     private File cacheDir;
     private Pattern postfixPattern;
@@ -49,8 +51,11 @@ public class ImageCache {
 
             File f = new File(cacheDir, fileName);
             if (f.exists()) return;
-            URL u = new URL(url);
-            NetworkUtils.loadURL(u, new FileOutputStream(f));
+            long size = NetworkUtils.loadURL(new URL(url), f);
+            // images that are super-small tend to be errors or invisible. don't waste file handles on them
+            if (size < MIN_VALID_CACHE_BYTES) {
+                f.delete();
+            }
         } catch (IOException e) {
             // a huge number of things could go wrong fetching and storing an image. don't spam logs with them
         }
@@ -84,16 +89,23 @@ public class ImageCache {
         if (! m.find()) {
             return null;
         }
-        String fileName = Integer.toString(url.hashCode()) + m.group(1);
+        String fileName = Integer.toString(Math.abs(url.hashCode())) + m.group(1);
         return fileName;
     }
 
-    public void cleanup() {
+    public void cleanup(Set<String> currentImages) {
+        // if there appear to be zero images in the system, a DB rebuild probably just
+        // occured, so don't trust that data for cleanup
+        if (currentImages.size() == 0) return;
+
+        Set<String> currentFiles = new HashSet<String>(currentImages.size());
+        for (String url : currentImages) currentFiles.add(getFileName(url));
         File[] files = cacheDir.listFiles();
         if (files == null) return;
         for (File f : files) {
             long timestamp = f.lastModified();
-            if (System.currentTimeMillis() > (timestamp + MAX_FILE_AGE_MILLIS)) {
+            if ((System.currentTimeMillis() > (timestamp + MAX_FILE_AGE_MILLIS)) ||
+                (!currentFiles.contains(f.getName()))) {
                 f.delete();
             }
         }

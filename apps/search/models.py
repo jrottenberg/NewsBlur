@@ -140,14 +140,18 @@ class MUserSearch(mongo.Document):
             feed.index_stories_for_search()
         
     @classmethod
-    def remove_all(cls):
+    def remove_all(cls, drop_index=False):
         user_searches = cls.objects.all()
         logging.info(" ---> ~SN~FRRemoving ~SB%s~SN user searches..." % user_searches.count())
         for user_search in user_searches:
-            user_search.remove()
-            
-        logging.info(" ---> ~FRRemoving stories search index...")
-        SearchStory.drop()
+            try:
+                user_search.remove()
+            except Exception, e:
+                print " ****> Error on search removal: %s" % e
+        
+        if drop_index:
+            logging.info(" ---> ~FRRemoving stories search index...")
+            SearchStory.drop()
         
     def remove(self):
         from apps.rss_feeds.models import Feed
@@ -369,7 +373,6 @@ class SearchFeed:
         }
         cls.ES.indices.put_mapping("%s-type" % cls.name, {
             'properties': mapping,
-            '_source': {'enabled': False},
         }, ["%s-index" % cls.name])
         
     @classmethod
@@ -388,6 +391,7 @@ class SearchFeed:
         
     @classmethod
     def query(cls, text):
+        cls.create_elasticsearch_mapping()
         try:
             cls.ES.default_indices = cls.index_name()
             cls.ES.indices.refresh()

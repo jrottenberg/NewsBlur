@@ -4,9 +4,6 @@ public class APIConstants {
 
     public static final String NEWSBLUR_URL = "https://www.newsblur.com";
     public static final String COOKIE_DOMAIN = ".newsblur.com";
-    public static final String URL_CATEGORIES = NEWSBLUR_URL + "/categories/";
-    public static final String PARAMETER_CATEGORY = "category";
-    public static final String URL_ADD_CATEGORIES = NEWSBLUR_URL + "/categories/subscribe";
     public static final String URL_AUTOFOLLOW_PREF = NEWSBLUR_URL + "/profile/set_preference";
     
     // TODO: make use of trailing slashes on URLs consistent or document why
@@ -25,6 +22,7 @@ public class APIConstants {
 	public static final String URL_SHARED_RIVER_STORIES = NEWSBLUR_URL + "/social/river_stories";
 	
 	public static final String URL_FEED_STORIES = NEWSBLUR_URL + "/reader/feed";
+	public static final String URL_FEED_UNREAD_COUNT = NEWSBLUR_URL + "/reader/feed_unread_count";
 	public static final String URL_SOCIALFEED_STORIES = NEWSBLUR_URL + "/social/stories";
 	public static final String URL_SIGNUP = NEWSBLUR_URL + "/api/signup";
 	public static final String URL_MARK_FEED_AS_READ = NEWSBLUR_URL + "/reader/mark_feed_as_read/";
@@ -45,6 +43,7 @@ public class APIConstants {
 	public static final String URL_CLASSIFIER_SAVE = NEWSBLUR_URL + "/classifier/save";
 	public static final String URL_STORY_TEXT = NEWSBLUR_URL + "/rss_feeds/original_text";
 	public static final String URL_UNREAD_HASHES = NEWSBLUR_URL + "/reader/unread_story_hashes";
+    public static final String URL_READ_STORIES = NEWSBLUR_URL + "/reader/read_stories";
 	
 	public static final String PARAMETER_FEEDS = "f";
 	public static final String PARAMETER_H = "h";
@@ -76,11 +75,14 @@ public class APIConstants {
 	public static final String PARAMETER_ORDER = "order";
 	public static final String PARAMETER_READ_FILTER = "read_filter";
 	public static final String PARAMETER_INCLUDE_TIMESTAMPS = "include_timestamps";
+    public static final String PARAMETER_GLOBAL_FEED = "global_feed";
+	public static final String PARAMETER_INCLUDE_HIDDEN = "include_hidden";
 
     public static final String VALUE_PREFIX_SOCIAL = "social:";
     public static final String VALUE_ALLSOCIAL = "river:blurblogs"; // the magic value passed to the mark-read API for all social feeds
     public static final String VALUE_OLDER = "older";
     public static final String VALUE_NEWER = "newer";
+    public static final String VALUE_TRUE = "true";
 	
     public static final String URL_CONNECT_FACEBOOK = NEWSBLUR_URL + "/oauth/facebook_connect/";
     public static final String URL_CONNECT_TWITTER = NEWSBLUR_URL + "/oauth/twitter_connect/";

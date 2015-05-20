@@ -8,12 +8,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import android.content.ContentProviderOperation;
-import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
-import android.database.Cursor;
-import android.net.Uri;
 import android.os.AsyncTask;
 import android.text.Html;
 import android.text.TextUtils;
@@ -23,13 +19,11 @@ import android.widget.Toast;
 import com.newsblur.R;
 import com.newsblur.activity.NbActivity;
 import com.newsblur.database.BlurDatabaseHelper;
-import com.newsblur.database.DatabaseConstants;
-import com.newsblur.database.FeedProvider;
 import com.newsblur.domain.Classifier;
 import com.newsblur.domain.Feed;
+import com.newsblur.domain.Folder;
 import com.newsblur.domain.SocialFeed;
 import com.newsblur.domain.Story;
-import com.newsblur.domain.ValueMultimap;
 import com.newsblur.network.APIManager;
 import com.newsblur.network.domain.NewsBlurResponse;
 import com.newsblur.service.NBSyncService;
@@ -134,22 +128,27 @@ public class FeedUtils {
     }
 
     private static void setStoryReadState(Story story, Context context, boolean read) {
+        dbHelper.touchStory(story.storyHash);
         if (story.read == read) { return; }
 
         // update the local object to show as read before DB is touched
         story.read = read;
         
         // update unread state and unread counts in the local DB
-        dbHelper.setStoryReadState(story, read);
+        Set<FeedSet> impactedFeeds = dbHelper.setStoryReadState(story, read);
         NbActivity.updateAllActivities();
 
         // tell the sync service we need to mark read
         ReadingAction ra = (read ? ReadingAction.markStoryRead(story.storyHash) : ReadingAction.markStoryUnread(story.storyHash));
         dbHelper.enqueueAction(ra);
         triggerSync(context);
+        NBSyncService.addRecountCandidates(impactedFeeds);
     }
 
     public static void markFeedsRead(final FeedSet fs, final Long olderThan, final Long newerThan, final Context context) {
+        dbHelper.markStoriesRead(fs, olderThan, newerThan);
+        dbHelper.updateLocalFeedCounts(fs);
+        NbActivity.updateAllActivities();
         new AsyncTask<Void, Void, Void>() {
             @Override
             protected Void doInBackground(Void... arg) {
@@ -160,8 +159,6 @@ public class FeedUtils {
                     FeedSet newFeedSet = FeedSet.folder("all", dbHelper.getAllFeeds());
                     ra = ReadingAction.markFeedRead(newFeedSet, olderThan, newerThan);
                 }
-                dbHelper.markStoriesRead(fs, olderThan, newerThan);
-                NbActivity.updateAllActivities();
                 dbHelper.enqueueAction(ra);
                 triggerSync(context);
                 return null;
@@ -188,17 +185,9 @@ public class FeedUtils {
 
         // next, update the local DB
         classifier.getMapForType(classifierType).put(key, classifierAction);
-        Uri classifierUri = FeedProvider.CLASSIFIER_URI.buildUpon().appendPath(feedId).build();
-        try {
-            // TODO: for feeds with many classifiers, this could be much faster by targeting just the row that changed
-			context.getContentResolver().delete(classifierUri, null, null);
-			for (ContentValues classifierValues : classifier.getContentValues()) {
-                context.getContentResolver().insert(classifierUri, classifierValues);
-            }
-        } catch (Exception e) {
-            Log.w(FeedUtils.class.getName(), "Could not update classifier in local storage.", e);
-        }
-
+        classifier.feedId = feedId;
+        dbHelper.clearClassifiersForFeed(feedId);
+        dbHelper.insertClassifier(classifier);
     }
 
     public static void shareStory(Story story, Context context) {
@@ -213,13 +202,24 @@ public class FeedUtils {
         context.startActivity(Intent.createChooser(intent, "Share using"));
     }
 
-    public static FeedSet feedSetFromFolderName(String folderName, Context context) {
-        Set<String> feedIds = dbHelper.getFeedsForFolder(folderName);
-        return FeedSet.folder(folderName, feedIds);
+    public static FeedSet feedSetFromFolderName(String folderName) {
+        return FeedSet.folder(folderName, getFeedIdsRecursive(folderName));
+    }
+
+    private static Set<String> getFeedIdsRecursive(String folderName) {
+        Folder folder = dbHelper.getFolder(folderName);
+        Set<String> feedIds = new HashSet<String>(folder.feedIds.size());
+        for (String id : folder.feedIds) feedIds.add(id);
+        for (String child : folder.children) feedIds.addAll(getFeedIdsRecursive(child));
+        return feedIds;
     }
 
     public static String getStoryText(String hash) {
         return dbHelper.getStoryText(hash);
+    }
+
+    public static String getStoryContent(String hash) {
+        return dbHelper.getStoryContent(hash);
     }
 
     /**
