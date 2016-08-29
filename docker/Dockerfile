@@ -42,3 +42,4 @@ RUN       set -ex \
 
 COPY      . /opt/newsblur/
 RUN       cp docker/local_settings.py .
+ENV       PYTHONPATH=/opt/newsblur

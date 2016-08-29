@@ -1,5 +1,6 @@
 import logging
 import pymongo
+import os
 
 # ===================
 # = Server Settings =
@@ -25,10 +26,12 @@ SECRET_KEY = 'YOUR SECRET KEY'
 AUTO_PREMIUM_NEW_USERS = True
 AUTO_ENABLE_NEW_USERS = True
 
+REDIS_HOST = os.environ.get('REDIS', 'redis')
+
 CACHES = {
     'default': {
         'BACKEND': 'redis_cache.RedisCache',
-        'LOCATION': 'redis:6379',
+        'LOCATION': REDIS_HOST + ':6379',
         'OPTIONS': {
             'DB': 6,
             'PARSER_CLASS': 'redis.connection.HiredisParser'
@@ -72,9 +75,9 @@ DATABASES = {
     'default': {
         'NAME': 'newsblur',
         'ENGINE': 'django.db.backends.postgresql_psycopg2',
-        'USER': 'newsblur',
-        'PASSWORD': 'newsblur',
-        'HOST': 'postgres',
+        'USER': os.environ.get('DATABASE_USER', 'newsblur'),
+        'PASSWORD': os.environ.get('DATABASE_PASS', 'newsblur'),
+        'HOST': os.environ.get('DATABASE_HOST', 'postgres'),
         'OPTIONS': {
             "autocommit": True,
         },
@@ -82,43 +85,43 @@ DATABASES = {
 }
 
 MONGO_DB = {
-    'name': 'newsblur',
-    'host': 'mongo',
+    'name': os.environ.get('MONGO_DB', 'newsblur'),
+    'host': os.environ.get('MONGO_HOST', 'mongo'),
     'port': 27017
 }
 
 MONGO_ANALYTICS_DB = {
-    'name': 'analytics',
-    'host': 'mongo',
+    'name': os.environ.get('MONGO_DB', 'analytics'),
+    'host': os.environ.get('MONGO_HOST', 'mongo'),
     'port': 27017
 }
 
 MONGODB_SLAVE = {
-    'host': 'mongo'
+    'host': os.environ.get('MONGO_HOST', 'mongo')
 }
 
 # Celery RabbitMQ/Redis Broker
-BROKER_URL = "redis://redis:6379/0"
+BROKER_URL = "redis://" + REDIS_HOST + ":6379/0"
 CELERY_RESULT_BACKEND = BROKER_URL
 
 REDIS = {
-    'host': 'redis',
+    'host': REDIS_HOST,
 }
 REDIS_PUBSUB = {
-    'host': 'redis',
+    'host': REDIS_HOST,
 }
 
 REDIS_PUBSUB_POOL = {
-    'host': 'redis',
+    'host': REDIS_HOST,
 }
 REDIS_STORY = {
-    'host': 'redis',
+    'host': REDIS_HOST,
 }
 REDIS_SESSIONS = {
-    'host': 'redis',
+    'host': REDIS_HOST,
 }
-ELASTICSEARCH_FEED_HOSTS = ["elasticsearch:9200"]
-ELASTICSEARCH_STORY_HOSTS = ["elasticsearch:9200"]
+ELASTICSEARCH_FEED_HOSTS = os.environ.get('ELASTICSEARCH__HOSTS', 'elasticsearch:9200')
+ELASTICSEARCH_STORY_HOSTS = os.environ.get('ELASTICSEARCH__HOSTS', 'elasticsearch:9200')
 
 BACKED_BY_AWS = {
     'pages_on_node': False,
