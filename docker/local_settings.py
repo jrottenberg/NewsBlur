@@ -26,7 +26,7 @@ SECRET_KEY = 'YOUR SECRET KEY'
 AUTO_PREMIUM_NEW_USERS = True
 AUTO_ENABLE_NEW_USERS = True
 
-REDIS_HOST = os.environ.get('REDIS', 'redis')
+REDIS_HOST = os.environ.get('REDIS_HOST', 'redis')
 
 CACHES = {
     'default': {
@@ -120,8 +120,8 @@ REDIS_STORY = {
 REDIS_SESSIONS = {
     'host': REDIS_HOST,
 }
-ELASTICSEARCH_FEED_HOSTS = os.environ.get('ELASTICSEARCH__HOSTS', 'elasticsearch:9200')
-ELASTICSEARCH_STORY_HOSTS = os.environ.get('ELASTICSEARCH__HOSTS', 'elasticsearch:9200')
+ELASTICSEARCH_FEED_HOSTS = os.environ.get('ELASTICSEARCH_HOST', 'elasticsearch:9200')
+ELASTICSEARCH_STORY_HOSTS = os.environ.get('ELASTICSEARCH_HOST', 'elasticsearch:9200')
 
 BACKED_BY_AWS = {
     'pages_on_node': False,
