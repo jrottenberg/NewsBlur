@@ -5,7 +5,7 @@ services:
     build:
       context: .
       dockerfile: docker/dockerfile
-      image: newsblur
+    image: newsblur
     links:
       - mongo
       - postgres
