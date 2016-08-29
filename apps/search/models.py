@@ -1,3 +1,4 @@
+import re
 import time
 import datetime
 import pymongo
@@ -270,7 +271,8 @@ class SearchStory:
     def query(cls, feed_ids, query, order, offset, limit):
         cls.create_elasticsearch_mapping()
         cls.ES.indices.refresh()
-        
+
+        query    = re.sub(r'([^\s\w_\-])+', ' ', query) # Strip non-alphanumeric        
         sort     = "date:desc" if order == "newest" else "date:asc"
         string_q = pyes.query.QueryStringQuery(query, default_operator="AND")
         feed_q   = pyes.query.TermsQuery('feed_id', feed_ids[:1000])
@@ -285,7 +287,13 @@ class SearchStory:
         logging.info(" ---> ~FG~SNSearch ~FCstories~FG for: ~SB%s~SN (across %s feed%s)" % 
                      (query, len(feed_ids), 's' if len(feed_ids) != 1 else ''))
         
-        return [r.get_id() for r in results]
+        try:
+            result_ids = [r.get_id() for r in results]
+        except pyes.InvalidQuery(), e:
+            logging.info(" ---> ~FRInvalid search query \"%s\": %s" % (query, e))
+            return []
+        
+        return result_ids
 
 
 class SearchFeed:

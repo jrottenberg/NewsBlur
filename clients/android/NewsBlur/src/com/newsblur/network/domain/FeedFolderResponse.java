@@ -16,6 +16,7 @@ import com.google.gson.JsonParser;
 import com.newsblur.domain.Feed;
 import com.newsblur.domain.Folder;
 import com.newsblur.domain.SocialFeed;
+import com.newsblur.domain.StarredCount;
 import com.newsblur.util.AppConstants;
 
 public class FeedFolderResponse {
@@ -28,6 +29,7 @@ public class FeedFolderResponse {
     public Set<Folder> folders;
 	public Set<Feed> feeds;
 	public Set<SocialFeed> socialFeeds;
+    public Set<StarredCount> starredCounts;
 	
 	public boolean isAuthenticated;
     public boolean isPremium;
@@ -97,6 +99,16 @@ public class FeedFolderResponse {
             Log.d( this.getClass().getName(), "root folder was missing.  added it.");
         } 
 
+        starredCounts = new HashSet<StarredCount>();
+        JsonArray starredCountsArray = (JsonArray) asJsonObject.get("starred_counts");
+        if (starredCountsArray != null) {
+            for (int i=0; i<starredCountsArray.size(); i++) {
+                JsonElement jsonElement = starredCountsArray.get(i);
+                StarredCount sc = gson.fromJson(jsonElement, StarredCount.class);
+                starredCounts.add(sc);
+            }
+        }
+
         parseTime = System.currentTimeMillis() - startTime;
 	}
 	
@@ -115,21 +127,21 @@ public class FeedFolderResponse {
             // a folder array contains either feed IDs or nested folder objects
 			if(jsonElement.isJsonPrimitive()) {
 				feedIds.add(jsonElement.getAsString());
-			} else {
+			} else if (jsonElement.isJsonObject()) {
                 // if it wasn't a feed ID, it is a nested folder object
                 Set<Entry<String, JsonElement>> entrySet = ((JsonObject) jsonElement).entrySet();
                 // recurse - nested folders are just objects with (usually one) field named for the folder
                 // that is a list of contained feeds or additional folders
                 for (Entry<String, JsonElement> next : entrySet) {
                     String nextName = next.getKey();
-                    // our DB uses a woraround that requires exclusive use of a delimiter char
-                    nextName = nextName.replaceAll(Folder.SPLIT_DELIM, "").trim();
                     children.add(nextName);
                     List<String> appendedParentList = new ArrayList<String>(parentNames);
                     appendedParentList.add(name);
                     parseFolderArray(appendedParentList, nextName, (JsonArray) next.getValue());
                 }
-			}
+			} else {
+                Log.w( this.getClass().getName(), "folder had null or malformed child: " + name);
+            }
 		}
         Folder folder = new Folder();
         folder.name = name;

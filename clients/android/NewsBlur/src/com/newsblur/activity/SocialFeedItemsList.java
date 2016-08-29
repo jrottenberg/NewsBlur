@@ -10,10 +10,8 @@ import com.newsblur.R;
 import com.newsblur.domain.SocialFeed;
 import com.newsblur.fragment.SocialFeedItemListFragment;
 import com.newsblur.util.DefaultFeedView;
-import com.newsblur.util.FeedSet;
 import com.newsblur.util.PrefsUtils;
 import com.newsblur.util.ReadFilter;
-import com.newsblur.util.StoryOrder;
 import com.newsblur.util.UIUtils;
 
 public class SocialFeedItemsList extends ItemsList {
@@ -39,11 +37,6 @@ public class SocialFeedItemsList extends ItemsList {
 	}
 
 	@Override
-    protected FeedSet createFeedSet() {
-        return FeedSet.singleSocialFeed(socialFeed.userId, socialFeed.username);
-    }
-
-	@Override
 	public boolean onCreateOptionsMenu(Menu menu) {
 		super.onCreateOptionsMenu(menu);
 		MenuInflater inflater = getMenuInflater();
@@ -51,16 +44,6 @@ public class SocialFeedItemsList extends ItemsList {
 		return true;
 	}
 	
-    @Override
-    public StoryOrder getStoryOrder() {
-        return PrefsUtils.getStoryOrderForFeed(this, socialFeed.userId);
-    }
-
-    @Override
-    public void updateStoryOrderPreference(StoryOrder newValue) {
-        PrefsUtils.setStoryOrderForFeed(this, socialFeed.userId, newValue);
-    }
-    
     @Override
     protected void updateReadFilterPreference(ReadFilter newValue) {
         PrefsUtils.setReadFilterForFeed(this, socialFeed.userId, newValue);

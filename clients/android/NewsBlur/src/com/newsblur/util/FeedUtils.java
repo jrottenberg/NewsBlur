@@ -25,15 +25,29 @@ import com.newsblur.service.NBSyncService;
 
 public class FeedUtils {
 
+    private FeedUtils() {} // util class - no instances
+
     // these are app-level singletons stored here for convenience. however, they
     // cannot be created lazily or via static init, they have to be created when
     // the main app context is created and it offers a reference
     public static BlurDatabaseHelper dbHelper;
-    public static ImageLoader imageLoader;
+    public static ImageLoader iconLoader;
+    public static ImageLoader thumbnailLoader;
+    public static FileCache storyImageCache;
 
     public static void offerInitContext(Context context) {
-        dbHelper = new BlurDatabaseHelper(context);
-        imageLoader = new ImageLoader(context);
+        if (dbHelper == null) {
+            dbHelper = new BlurDatabaseHelper(context.getApplicationContext());
+        }
+        if (iconLoader == null) {
+            iconLoader = ImageLoader.asIconLoader(context.getApplicationContext());
+        }
+        if (thumbnailLoader == null) {
+            thumbnailLoader = ImageLoader.asThumbnailLoader(context.getApplicationContext());
+        }
+        if (storyImageCache == null) {
+            storyImageCache = FileCache.asStoryImageCache(context.getApplicationContext());
+        }
     }
 
     private static void triggerSync(Context c) {
@@ -43,6 +57,22 @@ public class FeedUtils {
 
     public static void dropAndRecreateTables() {
         dbHelper.dropAndRecreateTables();
+    }
+
+    public static void clearStorySession() {
+        new AsyncTask<Void, Void, Void>() {
+            @Override
+            protected Void doInBackground(Void... arg) {
+                try {
+                    dbHelper.clearStorySession();
+                } catch (Exception e) {
+                    ; // TODO: this can evade DB-ready gating and crash. figure out how to
+                      // defer this call until the DB-ready broadcast is received, as this
+                      // can mask important errors
+                }
+                return null;
+            }
+        }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
     }
 
 	public static void setStorySaved(final Story story, final boolean saved, final Context context) {
@@ -90,35 +120,6 @@ public class FeedUtils {
         }.execute();
     }
 
-    public static void clearReadingSession() {
-        new AsyncTask<Void, Void, Void>() {
-            @Override
-            protected Void doInBackground(Void... arg) {
-                NBSyncService.resetFeeds();
-                try {
-                    dbHelper.clearReadingSession();
-                } catch (Exception e) {
-                    ; // this one call can evade the on-upgrade DB wipe and throw exceptions
-                }
-                return null;
-            }
-        }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
-    }
-
-    public static void activateAllStories() {
-        new AsyncTask<Void, Void, Void>() {
-            @Override
-            protected Void doInBackground(Void... arg) {
-                try {
-                    dbHelper.markStoriesActive(NBSyncService.ActivationMode.ALL, 0L);
-                } catch (Exception e) {
-                    ; // this call can evade the on-upgrade DB wipe and throw exceptions
-                }
-                return null;
-            }
-        }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
-    }
-
     public static void markStoryUnread(final Story story, final Context context) {
         new AsyncTask<Void, Void, Void>() {
             @Override
@@ -143,16 +144,14 @@ public class FeedUtils {
         dbHelper.touchStory(story.storyHash);
         if (story.read == read) { return; }
 
-        // update the local object to show as read before DB is touched
-        story.read = read;
-        
+        // tell the sync service we need to mark read
+        ReadingAction ra = (read ? ReadingAction.markStoryRead(story.storyHash) : ReadingAction.markStoryUnread(story.storyHash));
+        dbHelper.enqueueAction(ra);
+
         // update unread state and unread counts in the local DB
         Set<FeedSet> impactedFeeds = dbHelper.setStoryReadState(story, read);
         NbActivity.updateAllActivities(NbActivity.UPDATE_STORY);
 
-        // tell the sync service we need to mark read
-        ReadingAction ra = (read ? ReadingAction.markStoryRead(story.storyHash) : ReadingAction.markStoryUnread(story.storyHash));
-        dbHelper.enqueueAction(ra);
         triggerSync(context);
         NBSyncService.addRecountCandidates(impactedFeeds);
     }
@@ -201,14 +200,23 @@ public class FeedUtils {
         dbHelper.insertClassifier(classifier);
     }
 
-    public static void sendStory(Story story, Context context) {
+    public static void sendStoryBrief(Story story, Context context) {
         if (story == null ) { return; } 
         Intent intent = new Intent(android.content.Intent.ACTION_SEND);
         intent.setType("text/plain");
-        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_WHEN_TASK_RESET);
-        intent.putExtra(Intent.EXTRA_SUBJECT, Html.fromHtml(story.title));
-        final String shareString = context.getResources().getString(R.string.share);
-        intent.putExtra(Intent.EXTRA_TEXT, String.format(shareString, new Object[]{Html.fromHtml(story.title), story.permalink}));
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        intent.putExtra(Intent.EXTRA_TEXT, String.format(context.getResources().getString(R.string.send_brief), new Object[]{Html.fromHtml(story.title), story.permalink}));
+        context.startActivity(Intent.createChooser(intent, "Send using"));
+    }
+
+    public static void sendStoryFull(Story story, Context context) {
+        if (story == null ) { return; } 
+        String body = getStoryContent(story.storyHash);
+        Intent intent = new Intent(android.content.Intent.ACTION_SEND);
+        intent.setType("text/plain");
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        intent.putExtra(Intent.EXTRA_SUBJECT, Html.fromHtml(story.title).toString());
+        intent.putExtra(Intent.EXTRA_TEXT, String.format(context.getResources().getString(R.string.send_full), new Object[]{story.permalink, Html.fromHtml(story.title), Html.fromHtml(body)}));
         context.startActivity(Intent.createChooser(intent, "Send using"));
     }
 
@@ -245,6 +253,22 @@ public class FeedUtils {
         ra.doLocal(dbHelper);
         NbActivity.updateAllActivities(NbActivity.UPDATE_SOCIAL);
         triggerSync(context);
+    }
+
+    public static void moveFeedToFolders(final Context context, final String feedId, final Set<String> toFolders, final Set<String> inFolders) {
+        if (toFolders.size() < 1) return;
+        new AsyncTask<Void, Void, NewsBlurResponse>() {
+            @Override
+            protected NewsBlurResponse doInBackground(Void... arg) {
+                APIManager apiManager = new APIManager(context);
+                return apiManager.moveFeedToFolders(feedId, toFolders, inFolders);
+            }
+            @Override
+            protected void onPostExecute(NewsBlurResponse result) {
+                NBSyncService.forceFeedsFolders();
+                triggerSync(context);
+            }
+        }.execute();
     }
 
     public static FeedSet feedSetFromFolderName(String folderName) {

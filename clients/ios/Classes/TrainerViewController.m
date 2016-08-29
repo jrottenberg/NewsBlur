@@ -48,6 +48,10 @@
     [self hideGradientBackground:webView];
     [self.webView.scrollView setDelaysContentTouches:YES];
     [self.webView.scrollView setDecelerationRate:UIScrollViewDecelerationRateNormal];
+
+    // Work around iOS 9 issue where menu doesn't appear the first time
+    // http://stackoverflow.com/questions/32685198/
+    [self.webView becomeFirstResponder];
 }
 - (void) hideGradientBackground:(UIView*)theView
 {
@@ -78,7 +82,7 @@
         NSString *feedId = [self feedId];
         NSURL *url = [NSURL URLWithString:[NSString
                                            stringWithFormat:@"%@/reader/feeds_trainer?feed_id=%@",
-                                           NEWSBLUR_URL, feedId]];
+                                           self.appDelegate.url, feedId]];
 
         __weak __typeof(&*self)weakSelf = self;
         AFHTTPRequestOperation *request = [[AFHTTPRequestOperation alloc] initWithRequest:[NSURLRequest requestWithURL:url]];
@@ -100,7 +104,7 @@
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.0 * NSEC_PER_SEC),
                            dispatch_get_main_queue(), ^() {
                 if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
-                    [appDelegate.masterContainerViewController hidePopover];
+                    [appDelegate hidePopover];
                 } else {
                     [appDelegate.navigationController dismissViewControllerAnimated:YES completion:nil];
                 }
@@ -540,7 +544,7 @@
 #pragma mark Actions
 
 - (IBAction)doCloseDialog:(id)sender {
-    [appDelegate.masterContainerViewController hidePopover];
+    [appDelegate hidePopover];
     [appDelegate.trainerViewController dismissViewControllerAnimated:YES completion:nil];
 }
 
@@ -612,6 +616,12 @@ shouldStartLoadWithRequest:(NSURLRequest *)request
 - (void)hideTitle:(id)sender {
     NewsBlurAppDelegate *appDelegate = [NewsBlurAppDelegate sharedAppDelegate];
     [appDelegate.trainerViewController changeTitle:sender score:-1];
+}
+
+// Work around iOS 9 issue where menu doesn't appear the first time
+// http://stackoverflow.com/questions/32685198/
+- (BOOL)canBecomeFirstResponder {
+    return YES;
 }
 
 @end

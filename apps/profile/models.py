@@ -99,6 +99,7 @@ class Profile(models.Model):
             print " ---> You must pass confirm=True to delete this user."
             return
         
+        logging.user(self.user, "Deleting user: %s / %s" % (self.user.email, self.user.profile.last_seen_ip))
         try:
             self.cancel_premium()
         except:
@@ -161,7 +162,7 @@ class Profile(models.Model):
     
     def activate_premium(self, never_expire=False):
         from apps.profile.tasks import EmailNewPremium
-
+        
         EmailNewPremium.delay(user_id=self.user.pk)
         
         self.is_premium = True
@@ -356,9 +357,10 @@ class Profile(models.Model):
         stripe_cancel = self.cancel_premium_stripe()
         return paypal_cancel or stripe_cancel
     
-    def cancel_premium_paypal(self):
+    def cancel_premium_paypal(self, second_most_recent_only=False):
         transactions = PayPalIPN.objects.filter(custom=self.user.username,
-                                                txn_type='subscr_signup')
+                                                txn_type='subscr_signup').order_by('-subscr_date')
+        
         if not transactions:
             return
         
@@ -370,14 +372,24 @@ class Profile(models.Model):
             'API_CA_CERTS': False,
         }
         paypal = PayPalInterface(**paypal_opts)
-        transaction = transactions[0]
+        if second_most_recent_only:
+            # Check if user has an active subscription. If so, cancel it because a new one came in.
+            if len(transactions) > 1:
+                transaction = transactions[1]
+            else:
+                return False
+        else:
+            transaction = transactions[0]
         profileid = transaction.subscr_id
         try:
             paypal.manage_recurring_payments_profile_status(profileid=profileid, action='Cancel')
         except PayPalAPIResponseError:
-            logging.user(self.user, "~FRUser ~SBalready~SN canceled Paypal subscription")
+            logging.user(self.user, "~FRUser ~SBalready~SN canceled Paypal subscription: %s" % profileid)
         else:
-            logging.user(self.user, "~FRCanceling Paypal subscription")
+            if second_most_recent_only:
+                logging.user(self.user, "~FRCanceling ~BR~FWsecond-oldest~SB~FR Paypal subscription: %s" % profileid)
+            else:
+                logging.user(self.user, "~FRCanceling Paypal subscription: %s" % profileid)
         
         return True
         
@@ -402,12 +414,15 @@ class Profile(models.Model):
         usernames = set()
         numerics = re.compile(r'[0-9]+')
         for user in users:
-          opens = UserSubscription.objects.filter(user=user).aggregate(sum=Sum('feed_opens'))['sum']
-          reads = RUserStory.read_story_count(user.pk)
-          has_numbers = numerics.search(user.username)
-          if opens is None and not reads and has_numbers:
-             usernames.add(user.username)
-             print user.username, user.email, opens, reads
+            opens = UserSubscription.objects.filter(user=user).aggregate(sum=Sum('feed_opens'))['sum']
+            reads = RUserStory.read_story_count(user.pk)
+            has_numbers = numerics.search(user.username)
+            if opens is None and not reads and has_numbers:
+                usernames.add(user.username)
+                print " ---> Numerics: %-20s %-30s %-6s %-6s" % (user.username, user.email, opens, reads)
+            elif not user.profile.last_seen_ip:
+                usernames.add(user.username)
+                print " ---> No IP: %-20s %-30s %-6s %-6s" % (user.username, user.email, opens, reads)
         
         if not confirm: return usernames
         
@@ -879,6 +894,8 @@ def paypal_signup(sender, **kwargs):
     except:
         pass
     user.profile.activate_premium()
+    user.profile.cancel_premium_stripe()
+    user.profile.cancel_premium_paypal(second_most_recent_only=True)
 subscription_signup.connect(paypal_signup)
 
 def paypal_payment_history_sync(sender, **kwargs):
@@ -927,6 +944,7 @@ def stripe_signup(sender, full_json, **kwargs):
         profile = Profile.objects.get(stripe_id=stripe_id)
         logging.user(profile.user, "~BC~SB~FBStripe subscription signup")
         profile.activate_premium()
+        profile.cancel_premium_paypal()
     except Profile.DoesNotExist:
         return {"code": -1, "message": "User doesn't exist."}
 zebra_webhook_customer_subscription_created.connect(stripe_signup)
@@ -1015,7 +1033,7 @@ class PaymentHistory(models.Model):
         }
     
     @classmethod
-    def report(cls, months=25):
+    def report(cls, months=26):
         def _counter(start_date, end_date):
             payments = PaymentHistory.objects.filter(payment_date__gte=start_date, payment_date__lte=end_date)
             payments = payments.aggregate(avg=Avg('payment_amount'), 
@@ -1024,7 +1042,7 @@ class PaymentHistory(models.Model):
             print "%s-%02d-%02d - %s-%02d-%02d:\t$%.2f\t$%-6s\t%-4s" % (
                 start_date.year, start_date.month, start_date.day,
                 end_date.year, end_date.month, end_date.day,
-                round(payments['avg'], 2), payments['sum'], payments['count'])
+                round(payments['avg'] if payments['avg'] else 0, 2), payments['sum'] if payments['sum'] else 0, payments['count'])
             return payments['sum']
 
         print "\nMonthly Totals:"
@@ -1037,14 +1055,44 @@ class PaymentHistory(models.Model):
             total = _counter(start_date, end_date)
             month_totals[start_date.strftime("%Y-%m")] = total
 
+        print "\nCurrent Month Totals:"
+        month_totals = {}
+        years = datetime.datetime.now().year - 2009
+        for y in reversed(range(years)):
+            now = datetime.datetime.now()
+            start_date = datetime.datetime(now.year, now.month, 1) - dateutil.relativedelta.relativedelta(years=y)
+            end_time = start_date + datetime.timedelta(days=31)
+            end_date = datetime.datetime(end_time.year, end_time.month, 1) - datetime.timedelta(seconds=1)
+            if end_date > now: end_date = now
+            month_totals[start_date.strftime("%Y-%m")] = _counter(start_date, end_date)
+
+        print "\nMTD Totals:"
+        month_totals = {}
+        years = datetime.datetime.now().year - 2009
+        for y in reversed(range(years)):
+            now = datetime.datetime.now()
+            start_date = datetime.datetime(now.year, now.month, 1) - dateutil.relativedelta.relativedelta(years=y)
+            end_date = now - dateutil.relativedelta.relativedelta(years=y)
+            if end_date > now: end_date = now
+            month_totals[start_date.strftime("%Y-%m")] = _counter(start_date, end_date)
+
         print "\nYearly Totals:"
         year_totals = {}
         years = datetime.datetime.now().year - 2009
         for y in reversed(range(years)):
             now = datetime.datetime.now()
             start_date = datetime.datetime(now.year, 1, 1) - dateutil.relativedelta.relativedelta(years=y)
-            end_time = start_date + datetime.timedelta(days=365)
-            end_date = datetime.datetime(end_time.year, end_time.month, 30) - datetime.timedelta(seconds=1)
+            end_date = datetime.datetime(now.year, 1, 1) - dateutil.relativedelta.relativedelta(years=y-1) - datetime.timedelta(seconds=1)
+            if end_date > now: end_date = now
+            year_totals[now.year - y] = _counter(start_date, end_date)
+
+        print "\nYTD Totals:"
+        year_totals = {}
+        years = datetime.datetime.now().year - 2009
+        for y in reversed(range(years)):
+            now = datetime.datetime.now()
+            start_date = datetime.datetime(now.year, 1, 1) - dateutil.relativedelta.relativedelta(years=y)
+            end_date = now - dateutil.relativedelta.relativedelta(years=y)
             if end_date > now: end_date = now
             year_totals[now.year - y] = _counter(start_date, end_date)
 
@@ -1147,7 +1195,7 @@ class RNewUserQueue:
             logging.debug("~FRCan't activate free account, can't find user ~SB%s~SN. ~FB%s still in queue." % (user_id, count-1))
             return
             
-        logging.user(user, "~FBActivating free account (%s). %s still in queue." % (user.email, (count-1)))
+        logging.user(user, "~FBActivating free account (%s / %s). %s still in queue." % (user.email, user.profile.last_seen_ip, (count-1)))
 
         user.profile.activate_free()
     
