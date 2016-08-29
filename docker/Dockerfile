@@ -3,6 +3,8 @@ MAINTAINER julien@rottenberg.info
 
 
 WORKDIR   /opt/newsblur
+ENV       PYTHONPATH=/opt/newsblur
+
 CMD       ["gunicorn", "--bind", "0.0.0.0:8000", "wsgi"]
 EXPOSE    8000
 
@@ -36,9 +38,6 @@ RUN       set -ex \
             && apt-get purge -y --auto-remove ${buildDeps} \
             && rm -rf /var/lib/apt/lists/*
 
-
-# encoding
-#RUN       echo "import sys; reload(sys); sys.setdefaultencoding('utf-8')" | tee /usr/lib/python2.7/sitecustomize.py
 
 COPY      . /opt/newsblur/
 RUN       cp docker/local_settings.py .
